@@ -5,6 +5,7 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logger } from '../utils/logger.js';
+import { geminiRateLimiter } from '../utils/rateLimiter.js';
 
 class EmbeddingService {
   constructor() {
@@ -228,88 +229,64 @@ class EmbeddingService {
       for (let i = 0; i < validTexts.length; i += batch) {
         const batchTexts = validTexts.slice(i, i + batch);
         const batchIndex = Math.floor(i / batch) + 1;
+        
+        // Process chunks in parallel with controlled concurrency
+        const concurrencyLimit = 5; // Process 5 embeddings concurrently
         const batchEmbeddings = [];
 
-        // Process each item in the batch with individual retry logic
-        for (let j = 0; j < batchTexts.length; j++) {
-          const text = batchTexts[j];
-          let embedding = null;
-          let itemRetries = 0;
-          const maxItemRetries = 3;
+        for (let j = 0; j < batchTexts.length; j += concurrencyLimit) {
+          const concurrentTexts = batchTexts.slice(j, j + concurrencyLimit);
+          
+          const concurrentPromises = concurrentTexts.map(async (text, idx) => {
+            return await geminiRateLimiter.execute(async () => {
+              let embedding = null;
+              let itemRetries = 0;
+              const maxItemRetries = 3;
 
-          while (itemRetries <= maxItemRetries && !embedding) {
-            try {
-              const result = await this.embeddingModel.embedContent({
-                content: { parts: [{ text: text.trim() }] },
-                taskType: task
-              });
+              while (itemRetries <= maxItemRetries && !embedding) {
+                try {
+                  const result = await this.embeddingModel.embedContent({
+                    content: { parts: [{ text: text.trim() }] },
+                    taskType: task
+                  });
 
-              if (!result.embedding || !result.embedding.values) {
-                throw new Error(`Failed to generate embedding for text at batch index ${j}`);
+                  if (!result.embedding || !result.embedding.values) {
+                    throw new Error(`Failed to generate embedding`);
+                  }
+
+                  let embeddingArray = Array.from(result.embedding.values);
+                  if (embeddingArray.length > this.dimension) {
+                    embeddingArray = embeddingArray.slice(0, this.dimension);
+                  }
+                  if (embeddingArray.length !== this.dimension) {
+                    throw new Error(`Invalid embedding dimension`);
+                  }
+
+                  embedding = embeddingArray;
+                } catch (error) {
+                  itemRetries++;
+                  const isRetryable = error.status === 429 || 
+                    (error.status >= 500 && error.status < 600);
+                  
+                  if (isRetryable && itemRetries <= maxItemRetries) {
+                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, itemRetries) * 500));
+                    continue;
+                  }
+                  throw error;
+                }
               }
-
-              let embeddingArray = Array.from(result.embedding.values);
-
-              // Truncate to requested dimension if needed (MRL technique)
-              if (embeddingArray.length > this.dimension) {
-                embeddingArray = embeddingArray.slice(0, this.dimension);
-              }
-
-              if (embeddingArray.length !== this.dimension) {
-                throw new Error(`Invalid embedding dimension. Expected ${this.dimension}, got ${embeddingArray.length}`);
-              }
-
-              embedding = embeddingArray;
-            } catch (error) {
-              itemRetries++;
               
-              // Check if error is retryable (network errors, rate limits, server errors)
-              const isNetworkError = error.message.includes('fetch failed') ||
-                error.message.includes('ETIMEDOUT') ||
-                error.message.includes('ECONNRESET') ||
-                error.message.includes('ENOTFOUND') ||
-                error.message.includes('network') ||
-                error.message.includes('timeout');
-              
-              const isRetryable = error.status === 429 ||
-                (error.status >= 500 && error.status < 600) ||
-                isNetworkError;
+              return embedding;
+            });
+          });
 
-              if (isRetryable && itemRetries <= maxItemRetries) {
-                const delay = Math.pow(2, itemRetries) * 1000; // Exponential backoff: 2s, 4s, 8s
-                logger.warn(`Embedding generation failed for item ${j + 1} in batch ${batchIndex}, retrying in ${delay}ms (attempt ${itemRetries}/${maxItemRetries})`, {
-                  error: error.message,
-                  batchIndex,
-                  itemIndex: j
-                });
-                await new Promise(resolve => setTimeout(resolve, delay));
-                continue;
-              }
-
-              // Not retryable or max retries reached
-              logger.error(`Failed to generate embedding for item ${j + 1} in batch ${batchIndex} after ${itemRetries} attempts`, {
-                error: error.message,
-                batchIndex,
-                itemIndex: j
-              });
-              throw error;
-            }
-          }
-
-          if (embedding) {
-            batchEmbeddings.push(embedding);
-          } else {
-            throw new Error(`Failed to generate embedding for item ${j + 1} in batch ${batchIndex} after ${maxItemRetries} retries`);
-          }
-        }
-
-        if (batchEmbeddings.length !== batchTexts.length) {
-          throw new Error(`Expected ${batchTexts.length} embeddings, got ${batchEmbeddings.length} in batch ${batchIndex}`);
+          const results = await Promise.all(concurrentPromises);
+          batchEmbeddings.push(...results);
         }
 
         allEmbeddings.push(...batchEmbeddings);
 
-        // Log progress every 10 batches or at the end
+        // Log progress
         if (batchIndex % 10 === 0 || i + batch >= validTexts.length) {
           logger.info('Batch embedding progress', {
             batchIndex,
@@ -319,12 +296,9 @@ class EmbeddingService {
           });
         }
 
-        // Adaptive delay between batches - longer for large documents
-        if (i + batch < validTexts.length) {
-          // Increase delay as we process more batches (to avoid rate limits)
-          const baseDelay = 100;
-          const adaptiveDelay = Math.min(baseDelay * (1 + Math.floor(batchIndex / 50)), 2000); // Max 2 seconds
-          await new Promise(resolve => setTimeout(resolve, adaptiveDelay));
+        // Minimal delay between batches (only if rate limited)
+        if (i + batch < validTexts.length && batchIndex % 20 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 50)); // Small delay every 20 batches
         }
       }
 

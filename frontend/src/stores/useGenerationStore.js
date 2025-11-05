@@ -16,7 +16,7 @@ export const useGenerationStore = create((set, get) => ({
   progress: 0,
 
   // Actions
-  generate: async (useCase, documentIds, llmProvider = 'gemini') => {
+  generate: async (useCase, documentIds, llmProvider = 'gemini', promptId = null) => {
     try {
       set({
         generating: true,
@@ -44,7 +44,7 @@ export const useGenerationStore = create((set, get) => ({
         });
       }, 2000);
 
-      const response = await generateDocument(useCase, documentIds, llmProvider);
+      const response = await generateDocument(useCase, documentIds, llmProvider, promptId);
 
       clearInterval(progressInterval);
       

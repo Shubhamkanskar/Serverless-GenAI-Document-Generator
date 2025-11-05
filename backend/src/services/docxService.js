@@ -41,20 +41,70 @@ class DOCXService {
 
       const children = [];
 
+      // Cover Page Header
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: '═══════════════════════════════════════',
+              color: '1F4E78',
+              size: 24
+            })
+          ],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 200, before: 100 }
+        })
+      );
+
       // Title
       children.push(
         new Paragraph({
           children: [
             new TextRun({
-              text: data.title || 'Work Instructions',
+              text: '📋 ' + (data.title || 'Work Instructions').toUpperCase(),
               bold: true,
-              size: 32, // 16pt
+              size: 40, // 20pt
               color: '1F4E78'
             })
           ],
           heading: HeadingLevel.HEADING_1,
           alignment: AlignmentType.CENTER,
-          spacing: { after: 400, before: 200 }
+          spacing: { after: 300, before: 200 },
+          border: {
+            top: { color: '1F4E78', space: 1, style: BorderStyle.SINGLE, size: 24 },
+            bottom: { color: '1F4E78', space: 1, style: BorderStyle.SINGLE, size: 24 }
+          }
+        })
+      );
+
+      // Cover Page Footer
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: '═══════════════════════════════════════',
+              color: '1F4E78',
+              size: 24
+            })
+          ],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 100, before: 200 }
+        })
+      );
+
+      // Metadata
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: `Generated: ${new Date().toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })}`,
+              italics: true,
+              size: 18,
+              color: '666666'
+            })
+          ],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 600 }
         })
       );
 
@@ -126,7 +176,7 @@ class DOCXService {
       // Steps Section
       if (data.steps && Array.isArray(data.steps) && data.steps.length > 0) {
         children.push(
-          this.createSectionHeading('Step-by-Step Procedure', 200)
+          this.createSectionHeading('📝 Step-by-Step Procedure', 200)
         );
         
         data.steps.forEach((step, index) => {
@@ -135,33 +185,75 @@ class DOCXService {
           const details = step.details || step.additionalInfo || '';
 
           if (description) {
+            // Step header with number box
             children.push(
               new Paragraph({
                 children: [
                   new TextRun({
-                    text: `Step ${stepNumber}: `,
+                    text: `  ${stepNumber}  `,
+                    bold: true,
+                    size: 22,
+                    color: 'FFFFFF'
+                  }),
+                  new TextRun({
+                    text: '  ' + description,
                     bold: true,
                     size: 24,
                     color: '1F4E78'
-                  }),
-                  new TextRun({
-                    text: description,
-                    bold: true
                   })
                 ],
-                spacing: { before: 150, after: 100 }
+                spacing: { before: 200, after: 120 },
+                shading: {
+                  type: 'clear',
+                  fill: 'E7F3FF'
+                },
+                border: {
+                  left: { color: '4472C4', space: 1, style: BorderStyle.SINGLE, size: 24 }
+                }
               })
             );
 
+            // Step details
             if (details) {
               children.push(
                 new Paragraph({
-                  text: details,
-                  indent: { left: 600 },
-                  spacing: { after: 150 }
+                  children: [
+                    new TextRun({
+                      text: '➤ ',
+                      color: '4472C4',
+                      size: 20
+                    }),
+                    new TextRun({
+                      text: details,
+                      size: 22
+                    })
+                  ],
+                  indent: { left: 720 },
+                  spacing: { after: 180 }
                 })
               );
             }
+
+            // Add checkbox for completion
+            children.push(
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: '☐ ',
+                    size: 20,
+                    color: '666666'
+                  }),
+                  new TextRun({
+                    text: 'Completed',
+                    italics: true,
+                    size: 18,
+                    color: '666666'
+                  })
+                ],
+                indent: { left: 720 },
+                spacing: { after: 100 }
+              })
+            );
           }
         });
       }
@@ -169,31 +261,93 @@ class DOCXService {
       // Safety Warnings Section
       if (data.safetyWarnings && Array.isArray(data.safetyWarnings) && data.safetyWarnings.length > 0) {
         children.push(
-          this.createSectionHeading('Safety Warnings', 200)
+          this.createSectionHeading('⚠️ Safety Warnings & Precautions', 200)
         );
         
-        data.safetyWarnings.forEach(warning => {
+        data.safetyWarnings.forEach((warning, index) => {
           if (warning && typeof warning === 'string' && warning.trim()) {
             children.push(
               new Paragraph({
                 children: [
                   new TextRun({
-                    text: '⚠ ',
+                    text: '⚠️  ',
                     bold: true,
-                    size: 24,
-                    color: 'FF0000'
+                    size: 26,
+                    color: 'D32F2F'
+                  }),
+                  new TextRun({
+                    text: `WARNING ${index + 1}: `,
+                    bold: true,
+                    size: 22,
+                    color: 'D32F2F'
                   }),
                   new TextRun({
                     text: warning.trim(),
                     bold: true,
-                    color: 'FF0000'
+                    size: 22,
+                    color: '000000'
+                  })
+                ],
+                spacing: { after: 150, before: 100 },
+                indent: { left: 360 },
+                shading: {
+                  fill: 'FFE5E5',
+                  type: 'clear'
+                },
+                border: {
+                  left: { color: 'D32F2F', space: 1, style: BorderStyle.DOUBLE, size: 24 },
+                  top: { color: 'FFB0B0', space: 1, style: BorderStyle.SINGLE, size: 6 },
+                  bottom: { color: 'FFB0B0', space: 1, style: BorderStyle.SINGLE, size: 6 }
+                }
+              })
+            );
+          }
+        });
+
+        children.push(new Paragraph({ text: '', spacing: { after: 200 } }));
+      }
+
+      // Completion Checklist
+      if (data.completionChecklist && Array.isArray(data.completionChecklist) && data.completionChecklist.length > 0) {
+        children.push(
+          this.createSectionHeading('✓ Completion Checklist', 200)
+        );
+        
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: 'Verify all items below before marking this work instruction as complete:',
+                italics: true,
+                size: 20,
+                color: '666666'
+              })
+            ],
+            spacing: { after: 200 }
+          })
+        );
+
+        data.completionChecklist.forEach((item, index) => {
+          if (item && typeof item === 'string' && item.trim()) {
+            children.push(
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: '☐  ',
+                    bold: true,
+                    size: 26,
+                    color: '4CAF50'
+                  }),
+                  new TextRun({
+                    text: item.trim(),
+                    size: 22
                   })
                 ],
                 spacing: { after: 120 },
-                indent: { left: 200 },
+                indent: { left: 360 },
                 shading: {
-                  fill: 'FFF4E6',
-                  type: 'solid'
+                  fill: index % 2 === 0 ? 'F5F5F5' : 'FFFFFF',
+                  type: 'clear'
                 }
               })
             );
@@ -201,39 +355,76 @@ class DOCXService {
         });
       }
 
-      // Completion Checklist
-      if (data.completionChecklist && Array.isArray(data.completionChecklist) && data.completionChecklist.length > 0) {
-        children.push(
-          this.createSectionHeading('Completion Checklist', 200)
-        );
-        
-        data.completionChecklist.forEach((item, index) => {
-          if (item && typeof item === 'string' && item.trim()) {
-            children.push(
-              new Paragraph({
-                children: [
-                  new TextRun({
-                    text: '☐ ',
-                    bold: true,
-                    size: 24
-                  }),
-                  new TextRun({
-                    text: item.trim()
-                  })
-                ],
-                spacing: { after: 100 },
-                indent: { left: 200 }
-              })
-            );
-          }
-        });
-      }
-
-      // Add metadata paragraph at the end
+      // Add signature section
       children.push(
         new Paragraph({
           text: '',
-          spacing: { before: 400 }
+          spacing: { before: 600 }
+        })
+      );
+
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: '─────────────────────────────────────────────────────────',
+              color: 'CCCCCC'
+            })
+          ],
+          spacing: { after: 300 }
+        })
+      );
+
+      // Signature table
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: 'Performed By: ____________________________    Date: ____________    Time: ____________',
+              size: 20
+            })
+          ],
+          spacing: { after: 200 }
+        })
+      );
+
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: 'Verified By:   ____________________________    Date: ____________    Time: ____________',
+              size: 20
+            })
+          ],
+          spacing: { after: 400 }
+        })
+      );
+
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: '─────────────────────────────────────────────────────────',
+              color: 'CCCCCC'
+            })
+          ],
+          spacing: { after: 200 }
+        })
+      );
+
+      // Footer text
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: '📄 This document was auto-generated by GenAI Document Generator',
+              italics: true,
+              size: 16,
+              color: '999999'
+            })
+          ],
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 200 }
         })
       );
 

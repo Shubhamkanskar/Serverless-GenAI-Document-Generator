@@ -342,8 +342,8 @@ export const handler = async (event) => {
       return await addPromptHandler(event);
     }
     
-    // GET library for use case (has useCase but no promptId, and not /prompts)
-    if (method === 'GET' && useCase && !promptId && !path?.includes('/prompts')) {
+    // GET library for use case (has useCase but no promptId, and not ending with /prompts)
+    if (method === 'GET' && useCase && !promptId && !path?.endsWith('/prompts')) {
       return await getLibraryForUseCaseHandler(event);
     }
 

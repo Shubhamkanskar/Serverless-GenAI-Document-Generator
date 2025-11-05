@@ -11,6 +11,13 @@ provider:
   stage: ${opt:stage, 'dev'}
   iam:
     role: arn:aws:iam::836347236536:role/GenAIDocGeneratorLambdaRole
+    # Note: The IAM role must have lambda:InvokeFunction permission for the ingest function
+    # to allow async processing. Add this policy to the role:
+    # {
+    #   "Effect": "Allow",
+    #   "Action": "lambda:InvokeFunction",
+    #   "Resource": "arn:aws:lambda:*:*:function:genai-doc-generator-*-ingest"
+    # }
   environment:
     # AWS_REGION is automatically set by Lambda - don't set it manually
     # ChromaDB Configuration
@@ -51,8 +58,8 @@ provider:
 functions:
   upload:
     handler: src/handlers/upload.handler
-    timeout: 300  # 5 minutes for large file uploads
-    memorySize: 1024  # 1GB for processing large files
+    timeout: 300 # 5 minutes for large file uploads
+    memorySize: 1024 # 1GB for processing large files
     events:
       - http:
           path: api/upload
@@ -70,14 +77,53 @@ functions:
             allowCredentials: false
             maxAge: 86400
 
+  getUploadUrl:
+    handler: src/handlers/getUploadUrl.handler
+    timeout: 30
+    memorySize: 256
+    events:
+      - http:
+          path: api/get-upload-url
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Accept
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+            maxAge: 86400
+
   ingest:
     handler: src/handlers/ingest.handler
     timeout: 300
-    memorySize: 512
+    memorySize: 1536 # Increase for better CPU (1.5GB = ~1.5x CPU power)
     events:
       - http:
           path: api/ingest
           method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+
+  ingestStatus:
+    handler: src/handlers/ingestStatus.handler
+    timeout: 30
+    memorySize: 256
+    events:
+      - http:
+          path: api/ingest-status/{fileId}
+          method: get
           cors:
             origin: "*"
             headers:

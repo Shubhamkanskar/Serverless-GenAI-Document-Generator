@@ -35,40 +35,78 @@ class ExcelService {
       workbook.modified = new Date();
 
       // Create worksheet
-      const worksheet = workbook.addWorksheet('Inspection Checksheet');
+      const worksheet = workbook.addWorksheet('Inspection Checksheet', {
+        properties: { tabColor: { argb: 'FF4472C4' } }
+      });
 
-      // Define columns with proper widths
+      // Add title row
+      worksheet.mergeCells('A1:G1');
+      const titleCell = worksheet.getCell('A1');
+      titleCell.value = '🔧 MAINTENANCE INSPECTION CHECKSHEET 🔧';
+      titleCell.font = {
+        name: 'Calibri',
+        bold: true,
+        size: 18,
+        color: { argb: 'FFFFFFFF' }
+      };
+      titleCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1F4E78' } // Dark blue
+      };
+      titleCell.alignment = {
+        vertical: 'middle',
+        horizontal: 'center'
+      };
+      worksheet.getRow(1).height = 35;
+
+      // Add metadata row
+      worksheet.mergeCells('A2:G2');
+      const metaCell = worksheet.getCell('A2');
+      metaCell.value = `Generated: ${new Date().toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' })}`;
+      metaCell.font = { italic: true, size: 10, color: { argb: 'FF666666' } };
+      metaCell.alignment = { horizontal: 'center' };
+      worksheet.getRow(2).height = 18;
+
+      // Empty row for spacing
+      worksheet.addRow([]);
+
+      // Define columns with proper widths (row 4 will be headers)
       worksheet.columns = [
+        { header: '№', key: 'number', width: 5 },
         { header: 'Item Name', key: 'itemName', width: 25 },
         { header: 'Inspection Point', key: 'inspectionPoint', width: 40 },
         { header: 'Frequency', key: 'frequency', width: 15 },
-        { header: 'Expected Status', key: 'expectedStatus', width: 20 },
+        { header: 'Expected Status', key: 'expectedStatus', width: 22 },
         { header: 'Notes', key: 'notes', width: 30 },
-        { header: 'Status', key: 'status', width: 15 }
+        { header: 'Actual Status ✓', key: 'status', width: 18 }
       ];
 
-      // Style header row
-      const headerRow = worksheet.getRow(1);
+      // Style header row (now row 4)
+      const headerRow = worksheet.getRow(4);
       headerRow.font = {
+        name: 'Calibri',
         bold: true,
-        size: 12,
+        size: 11,
         color: { argb: 'FFFFFFFF' }
       };
       headerRow.fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FF4472C4' } // Blue background
+        fgColor: { argb: 'FF4472C4' } // Medium blue
       };
       headerRow.alignment = {
         vertical: 'middle',
-        horizontal: 'center'
+        horizontal: 'center',
+        wrapText: true
       };
-      headerRow.height = 20;
+      headerRow.height = 30;
 
       // Add data rows
       items.forEach((item, index) => {
         // Validate item structure
         const rowData = {
+          number: index + 1,
           itemName: item.itemName || item.name || '',
           inspectionPoint: item.inspectionPoint || item.inspection || '',
           frequency: item.frequency || '',
@@ -84,40 +122,103 @@ class ExcelService {
           row.fill = {
             type: 'pattern',
             pattern: 'solid',
-            fgColor: { argb: 'FFF2F2F2' } // Light gray
+            fgColor: { argb: 'FFF8F9FA' } // Very light gray
+          };
+        } else {
+          row.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFFFFFFF' } // White
           };
         }
 
         // Set row height
-        row.height = 18;
+        row.height = 22;
+
+        // Style number column
+        row.getCell('number').alignment = { horizontal: 'center', vertical: 'middle' };
+        row.getCell('number').font = { bold: true, size: 10, color: { argb: 'FF666666' } };
 
         // Center align frequency and status columns
-        row.getCell('frequency').alignment = { horizontal: 'center' };
-        row.getCell('status').alignment = { horizontal: 'center' };
-        row.getCell('expectedStatus').alignment = { horizontal: 'center' };
+        row.getCell('frequency').alignment = { horizontal: 'center', vertical: 'middle' };
+        row.getCell('status').alignment = { horizontal: 'center', vertical: 'middle' };
+        row.getCell('expectedStatus').alignment = { horizontal: 'center', vertical: 'middle' };
+
+        // Color code frequency
+        const freq = (item.frequency || '').toLowerCase();
+        if (freq.includes('daily')) {
+          row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
+        } else if (freq.includes('weekly')) {
+          row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEB9C' } };
+        } else if (freq.includes('monthly')) {
+          row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+        } else if (freq.includes('annual') || freq.includes('yearly')) {
+          row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6E0F4' } };
+        }
+
+        // Wrap text in inspection point and notes
+        row.getCell('inspectionPoint').alignment = { wrapText: true, vertical: 'top' };
+        row.getCell('notes').alignment = { wrapText: true, vertical: 'top' };
       });
 
-      // Apply borders to all cells
+      // Apply borders to all cells (starting from row 4 - headers)
       worksheet.eachRow((row, rowNumber) => {
-        row.eachCell((cell) => {
-          cell.border = {
-            top: { style: 'thin', color: { argb: 'FFD0D0D0' } },
-            left: { style: 'thin', color: { argb: 'FFD0D0D0' } },
-            bottom: { style: 'thin', color: { argb: 'FFD0D0D0' } },
-            right: { style: 'thin', color: { argb: 'FFD0D0D0' } }
-          };
-        });
+        if (rowNumber >= 4) { // Only apply to header and data rows
+          row.eachCell((cell) => {
+            cell.border = {
+              top: { style: 'thin', color: { argb: 'FFCCCCCC' } },
+              left: { style: 'thin', color: { argb: 'FFCCCCCC' } },
+              bottom: { style: 'thin', color: { argb: 'FFCCCCCC' } },
+              right: { style: 'thin', color: { argb: 'FFCCCCCC' } }
+            };
+          });
+        }
       });
 
-      // Freeze header row for scrolling
+      // Add data validation for Status column (Pass/Fail/N/A dropdown)
+      const statusColumn = 'G'; // Status column
+      for (let i = 5; i <= items.length + 4; i++) { // Starting from row 5 (first data row after header)
+        worksheet.getCell(`${statusColumn}${i}`).dataValidation = {
+          type: 'list',
+          allowBlank: true,
+          formulae: ['"✓ Pass,✗ Fail,⚠ Issue,N/A"'],
+          showErrorMessage: true,
+          errorTitle: 'Invalid Entry',
+          error: 'Please select from the dropdown list'
+        };
+      }
+
+      // Add auto-filter to header row
+      worksheet.autoFilter = {
+        from: { row: 4, column: 1 },
+        to: { row: 4, column: 7 }
+      };
+
+      // Freeze rows above data (title, metadata, blank row, and header)
       worksheet.views = [
         {
           state: 'frozen',
-          ySplit: 1,
-          activeCell: 'A2',
+          ySplit: 4, // Freeze first 4 rows
+          xSplit: 0,
+          topLeftCell: 'A5',
+          activeCell: 'A5',
           showGridLines: true
         }
       ];
+
+      // Add legend/instructions at the bottom
+      const lastRow = items.length + 5;
+      worksheet.mergeCells(`A${lastRow}:G${lastRow}`);
+      const legendCell = worksheet.getCell(`A${lastRow}`);
+      legendCell.value = '💡 Instructions: Fill in "Actual Status" column during inspection. Use dropdown for status (✓ Pass / ✗ Fail / ⚠ Issue / N/A). Color codes - Daily: Red, Weekly: Yellow, Monthly: Green, Annual: Blue';
+      legendCell.font = { italic: true, size: 9, color: { argb: 'FF666666' } };
+      legendCell.alignment = { horizontal: 'center', wrapText: true };
+      legendCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFF9E6' }
+      };
+      worksheet.getRow(lastRow).height = 35;
 
       // Auto-fit columns (with minimum width)
       worksheet.columns.forEach((column) => {

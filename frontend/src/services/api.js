@@ -55,7 +55,102 @@ api.interceptors.response.use(
   }
 );
 
+/**
+ * Get presigned URL for direct S3 upload (for files >10MB)
+ * @param {string} fileName - File name
+ * @param {number} fileSize - File size in bytes
+ * @param {string} contentType - MIME type
+ * @returns {Promise<Object>} Presigned URL and file metadata
+ */
+export const getUploadUrl = async (fileName, fileSize, contentType = 'application/pdf') => {
+  return api.post('/get-upload-url', {
+    fileName,
+    fileSize,
+    contentType
+  });
+};
+
+/**
+ * Upload file directly to S3 using presigned URL
+ * @param {string} presignedUrl - Presigned S3 URL
+ * @param {File} file - File to upload
+ * @param {Function} onProgress - Progress callback
+ * @returns {Promise<void>}
+ */
+export const uploadToS3 = async (presignedUrl, file, onProgress) => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable && onProgress) {
+        const percentCompleted = Math.round((e.loaded * 100) / e.total);
+        onProgress(percentCompleted);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status === 200) {
+        resolve();
+      } else {
+        reject(new Error(`Upload failed with status ${xhr.status}`));
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      reject(new Error('Upload failed due to network error'));
+    });
+
+    xhr.addEventListener('abort', () => {
+      reject(new Error('Upload was aborted'));
+    });
+
+    xhr.open('PUT', presignedUrl);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/pdf');
+    xhr.send(file);
+  });
+};
+
 export const uploadDocument = async (file) => {
+  const FILE_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB API Gateway limit
+
+  // For files >10MB, use presigned URL upload to bypass API Gateway
+  if (file.size > FILE_SIZE_LIMIT) {
+    console.log(`File size (${(file.size / (1024 * 1024)).toFixed(2)}MB) exceeds API Gateway limit. Using presigned URL upload.`);
+    
+    // Step 1: Get presigned URL
+    const response = await getUploadUrl(
+      file.name,
+      file.size,
+      file.type || 'application/pdf'
+    );
+    
+    // Extract response data (handle both direct response and wrapped response)
+    const responseData = response.data || response;
+    const { fileId, fileName, originalFileName, s3Key, s3Bucket, uploadedAt, presignedUrl } = responseData;
+
+    // Step 2: Upload directly to S3
+    await uploadToS3(
+      presignedUrl,
+      file,
+      (progress) => {
+        console.log(`Upload progress: ${progress}%`);
+      }
+    );
+
+    // Step 3: Return metadata in same format as regular upload
+    return {
+      fileId,
+      fileName,
+      originalFileName,
+      fileSize: file.size,
+      contentType: file.type || 'application/pdf',
+      s3Key,
+      s3Bucket,
+      uploadedAt
+    };
+  }
+
+  // For files <=10MB, use regular API Gateway upload
   const formData = new FormData();
   formData.append('file', file);
   // Don't set Content-Type manually - browser will set it automatically with boundary parameter
@@ -72,8 +167,17 @@ export const ingestDocument = async (fileId, s3Key) => {
   return api.post('/ingest', { fileId, s3Key });
 };
 
-export const generateDocument = async (useCase, documentIds, llmProvider = 'gemini') => {
-  return api.post('/generate-document', { useCase, documentIds, llmProvider });
+/**
+ * Check ingestion status for a document
+ * @param {string} fileId - File ID to check status for
+ * @returns {Promise<Object>} Status response
+ */
+export const checkIngestStatus = async (fileId) => {
+  return api.get(`/ingest-status/${fileId}`);
+};
+
+export const generateDocument = async (useCase, documentIds, llmProvider = 'gemini', promptId = null) => {
+  return api.post('/generate-document', { useCase, documentIds, llmProvider, promptId });
 };
 
 export const getDownloadUrl = async (fileId) => {

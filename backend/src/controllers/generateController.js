@@ -9,6 +9,7 @@ import geminiService from '../services/geminiService.js';
 import bedrockService from '../services/bedrockService.js';
 import embeddingService from '../services/embeddingService.js';
 import { generateChecksheetPrompt, generateWorkInstructionsPrompt } from '../config/prompts.js';
+import { getPrompt } from '../services/promptLibraryService.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -18,9 +19,10 @@ import { logger } from '../utils/logger.js';
  * @param {Array<string>} params.documentIds - Array of document UUIDs
  * @param {string} [params.queryText] - Optional query text for better relevance
  * @param {string} [params.llmProvider] - LLM provider ('bedrock' or 'gemini'), defaults to 'gemini'
+ * @param {string} [params.promptId] - Specific prompt ID to use, defaults to active prompt
  * @returns {Promise<Object>} Generated content and metadata
  */
-export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvider = 'gemini' }) => {
+export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvider = 'gemini', promptId = null }) => {
   // Force Gemini as Bedrock is not accessible
   // If bedrock is requested, fallback to Gemini
   if (llmProvider === 'bedrock') {
@@ -94,14 +96,12 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
   logger.info(`Context built: ${context.length} characters from ${relevantChunks.length} chunks`);
 
   // Step 4: Get prompt template based on use case from prompt library
-  // Support for promptId parameter to select specific prompt from library
-  const promptId = null; // Can be passed from request in future
+  // Use promptId parameter to select specific prompt from library
   logger.info(`Getting prompt template for use case: ${useCase}${promptId ? `, promptId: ${promptId}` : ' (using active prompt)'}`);
   let promptConfig;
   
   try {
-    // Try to load from prompt library service (supports multiple prompts per use case)
-    const { getPrompt } = await import('../services/promptLibraryService.js');
+    // Load from prompt library service (supports multiple prompts per use case)
     const selectedPrompt = await getPrompt(useCase, promptId);
     
     if (selectedPrompt) {
@@ -165,12 +165,69 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
     );
   }
 
+  // Log detailed response info
   logger.info('AI response received and parsed successfully', {
     llmProvider,
-    dataKeys: Object.keys(parsedData)
+    dataType: Array.isArray(parsedData) ? 'array' : 'object',
+    dataKeys: Array.isArray(parsedData) ? `array[${parsedData.length}]` : Object.keys(parsedData).join(', ')
   });
 
+  // Validate content based on use case
+  if (useCase === 'workInstructions') {
+    logger.info('Validating work instructions content', {
+      hasTitle: !!parsedData.title,
+      hasOverview: !!parsedData.overview,
+      hasPrerequisites: !!parsedData.prerequisites,
+      hasSteps: !!(parsedData.steps && parsedData.steps.length > 0),
+      hasSafetyWarnings: !!(parsedData.safetyWarnings && parsedData.safetyWarnings.length > 0),
+      hasCompletionChecklist: !!(parsedData.completionChecklist && parsedData.completionChecklist.length > 0)
+    });
+
+    // Check if there's ANY content
+    const hasContent = 
+      parsedData.title ||
+      parsedData.overview ||
+      (parsedData.prerequisites && (
+        Array.isArray(parsedData.prerequisites) ? parsedData.prerequisites.length > 0 :
+        (parsedData.prerequisites.tools?.length > 0 || 
+         parsedData.prerequisites.materials?.length > 0 || 
+         parsedData.prerequisites.safety?.length > 0)
+      )) ||
+      (parsedData.steps && parsedData.steps.length > 0) ||
+      (parsedData.safetyWarnings && parsedData.safetyWarnings.length > 0) ||
+      (parsedData.completionChecklist && parsedData.completionChecklist.length > 0);
+
+    if (!hasContent) {
+      logger.error('AI returned empty work instructions', {
+        parsedDataSample: JSON.stringify(parsedData).substring(0, 500)
+      });
+      throw new Error('AI returned empty work instructions. The documents may not contain relevant procedural information. Try uploading documents with step-by-step procedures, or select a different prompt style.');
+    }
+
+    // Add a default title if missing but other content exists
+    if (!parsedData.title && hasContent) {
+      parsedData.title = 'Work Instructions';
+      logger.info('Added default title to work instructions');
+    }
+  }
+
+  if (useCase === 'checksheet') {
+    const items = Array.isArray(parsedData) ? parsedData : (parsedData.items || parsedData.data || []);
+    logger.info('Validating checksheet content', {
+      itemCount: items.length
+    });
+
+    if (!items || items.length === 0) {
+      logger.error('AI returned empty checksheet', {
+        parsedDataSample: JSON.stringify(parsedData).substring(0, 500)
+      });
+      throw new Error('AI returned empty checksheet. The documents may not contain inspection or maintenance information. Try uploading maintenance manuals or inspection guides, or select a different prompt style.');
+    }
+  }
+
   const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
+
+  logger.info('Content validation passed', { useCase, processingTime: `${processingTime}s` });
 
   return {
     useCase,

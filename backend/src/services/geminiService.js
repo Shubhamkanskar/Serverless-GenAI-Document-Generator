@@ -6,6 +6,7 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logger } from '../utils/logger.js';
+import { geminiRateLimiter } from '../utils/rateLimiter.js';
 
 class GeminiService {
   constructor() {
@@ -111,7 +112,10 @@ class GeminiService {
       // Gemini handles system instruction separately, but we can also include it in the prompt
       const prompt = `${systemPrompt}\n\n${userPrompt}`;
 
-      const result = await model.generateContent(prompt);
+      // Use rate limiter to prevent hitting API limits
+      const result = await geminiRateLimiter.execute(async () => {
+        return await model.generateContent(prompt);
+      });
       const response = await result.response;
       const responseText = response.text();
 

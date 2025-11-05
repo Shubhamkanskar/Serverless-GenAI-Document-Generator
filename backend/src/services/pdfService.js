@@ -16,8 +16,8 @@ class PDFService {
     this.documentsBucket = process.env.S3_DOCUMENTS_BUCKET || process.env.DOCUMENTS_BUCKET;
     
     // Chunking configuration
-    this.chunkSize = 1000;
-    this.chunkOverlap = 200;
+    this.chunkSize = 1500; // Increase from 1000 to 1500
+    this.chunkOverlap = 200; // Keep overlap the same
     
     logger.info('PDFService initialized', {
       region,

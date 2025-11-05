@@ -46,7 +46,7 @@ export const handler = async (event, context) => {
       return createErrorResponse(400, 'Invalid or missing request body');
     }
 
-    const { useCase, documentIds, queryText, llmProvider = 'gemini' } = requestBody;
+    const { useCase, documentIds, queryText, llmProvider = 'gemini', promptId = null } = requestBody;
 
     // Validate input
     try {
@@ -56,14 +56,17 @@ export const handler = async (event, context) => {
       return createErrorResponse(400, validationError.message);
     }
 
-    logger.info(`Generating ${useCase} document for documents: ${documentIds.join(', ')}`);
+    logger.info(`Generating ${useCase} document for documents: ${documentIds.join(', ')}`, {
+      llmProvider,
+      promptId: promptId || 'default'
+    });
 
     const startTime = Date.now();
 
     // Step 1: Generate AI content using controller
     let aiGeneratedData;
     try {
-      const aiResponse = await handleGenerate({ useCase, documentIds, queryText, llmProvider });
+      const aiResponse = await handleGenerate({ useCase, documentIds, queryText, llmProvider, promptId });
       aiGeneratedData = aiResponse.data; // Extract the parsed data from AI response
 
       if (!aiGeneratedData) {

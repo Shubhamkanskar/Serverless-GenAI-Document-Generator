@@ -80,7 +80,7 @@ const uploadHandler = async (event, context) => {
 
     // Validate file size (max 100MB for PDF)
     // Note: API Gateway REST API has a 10MB payload limit.
-    // For files >10MB, consider implementing presigned URL uploads for direct S3 upload.
+    // Files >10MB will automatically use presigned URL uploads (see frontend/src/services/api.js)
     try {
       validateFileSize(file.size, 100);
     } catch (sizeError) {
@@ -89,13 +89,14 @@ const uploadHandler = async (event, context) => {
     }
     
     // Warn if file is >10MB (API Gateway limit)
+    // Note: Frontend should handle this automatically by using presigned URLs
     if (file.size > 10 * 1024 * 1024) {
-      logger.warn('File size exceeds API Gateway 10MB limit', { 
+      logger.warn('File size exceeds API Gateway 10MB limit - this should use presigned URL upload', { 
         size: file.size, 
         sizeMB: (file.size / (1024 * 1024)).toFixed(2) 
       });
-      // Still allow the upload attempt - might work if binary media types are configured correctly
-      // For production, implement presigned URL uploads for files >10MB
+      // Return error to guide user to use presigned URL endpoint
+      return createErrorResponse(413, 'File size exceeds API Gateway 10MB limit. Please use the presigned URL upload endpoint for files larger than 10MB.');
     }
 
     // Generate unique file ID

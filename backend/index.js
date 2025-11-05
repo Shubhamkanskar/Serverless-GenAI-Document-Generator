@@ -13,6 +13,7 @@ import express from 'express';
 import multer from 'multer';
 import cors from 'cors';
 import { handler as uploadHandler } from './src/handlers/upload.js';
+import { handler as getUploadUrlHandler } from './src/handlers/getUploadUrl.js';
 import { handler as ingestHandler } from './src/handlers/ingest.js';
 import { handler as generateHandler } from './src/handlers/generate.js';
 import { handler as generateDocumentHandler } from './src/handlers/generateDocument.js';
@@ -55,6 +56,26 @@ app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 // Helper functions are imported from expressAdapter.js
 
 // API Routes
+
+/**
+ * POST /api/get-upload-url
+ * Get presigned URL for direct S3 upload (for files >10MB)
+ */
+app.post('/api/get-upload-url', async (req, res) => {
+    try {
+        const event = expressToLambdaEvent(req);
+        const context = {};
+        const response = await getUploadUrlHandler(event, context);
+        lambdaToExpressResponse(response, res);
+    } catch (error) {
+        logger.error('Get upload URL handler error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Failed to generate upload URL'
+        });
+    }
+});
 
 /**
  * POST /api/upload

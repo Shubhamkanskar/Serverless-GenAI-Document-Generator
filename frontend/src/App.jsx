@@ -5,6 +5,7 @@ import { useAppStore } from "./stores/useAppStore";
 import FileUpload from "./components/FileUpload";
 import DocumentList from "./components/DocumentList";
 import UseCaseSelector from "./components/UseCaseSelector";
+import PromptSelector from "./components/PromptSelector";
 import GenerateButton from "./components/GenerateButton";
 import DownloadSection from "./components/DownloadSection";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -36,9 +37,11 @@ const App = () => {
 
   // App store
   const selectedUseCase = useAppStore((state) => state.selectedUseCase);
+  const selectedPromptId = useAppStore((state) => state.selectedPromptId);
   const selectedLLM = useAppStore((state) => state.selectedLLM); // Always 'gemini' now
   const showPromptBook = useAppStore((state) => state.showPromptBook);
   const setSelectedUseCase = useAppStore((state) => state.setSelectedUseCase);
+  const setSelectedPromptId = useAppStore((state) => state.setSelectedPromptId);
   const setShowPromptBook = useAppStore((state) => state.setShowPromptBook);
 
   // Computed values
@@ -68,7 +71,7 @@ const App = () => {
 
   const handleGenerate = async (useCase, documentIds) => {
     try {
-      await generate(useCase, documentIds, selectedLLM);
+      await generate(useCase, documentIds, selectedLLM, selectedPromptId);
     } catch (err) {
       console.error("Error generating document:", err);
     }
@@ -257,23 +260,33 @@ const App = () => {
                     </p>
                   </div>
                 </div>
-                <div className="ml-11">
+                <div className="ml-11 space-y-4">
                   <UseCaseSelector
                     selectedUseCase={selectedUseCase}
                     onSelect={setSelectedUseCase}
                     hasProcessedDocuments={hasProcessedDocuments}
                   />
-                  {/* Active Prompt Info */}
+                  
+                  {/* Prompt Selector - Shows after use case is selected */}
                   {selectedUseCase && (
+                    <PromptSelector
+                      useCase={selectedUseCase}
+                      selectedPromptId={selectedPromptId}
+                      onSelectPrompt={setSelectedPromptId}
+                    />
+                  )}
+
+                  {/* Active Prompt Info */}
+                  {selectedUseCase && selectedPromptId && (
                     <ActivePromptInfo useCase={selectedUseCase} />
                   )}
                   
                   {/* Info about what happens next */}
-                  {selectedUseCase && (
+                  {selectedUseCase && selectedPromptId && (
                     <div className="mt-4 p-4 bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800 rounded-lg">
                       <p className="text-sm text-purple-900 dark:text-purple-100">
                         <span className="font-semibold">
-                          Use case selected:
+                          Ready to generate:
                         </span>{" "}
                         {selectedUseCase === "checksheet"
                           ? "Checksheet will generate an Excel file with inspection points"
@@ -288,7 +301,7 @@ const App = () => {
 
 
             {/* Step 4: Generate Document */}
-            {hasProcessedDocuments && selectedUseCase && (
+            {hasProcessedDocuments && selectedUseCase && selectedPromptId && (
               <section className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-300">
                 <div className="flex items-center gap-3">
                   <div className="flex-shrink-0 w-8 h-8 rounded-full bg-green-500/10 dark:bg-green-500/20 flex items-center justify-center">
