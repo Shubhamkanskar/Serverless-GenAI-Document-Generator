@@ -1,0 +1,61 @@
+# Development files
+.git/**
+.gitignore
+.env
+.env.*
+*.log
+*.md
+!README.md
+node_modules/.cache/**
+.cache/**
+coverage/**
+.nyc_output/**
+test/**
+tests/**
+*.test.js
+*.spec.js
+*.test.ts
+*.spec.ts
+__tests__/**
+__mocks__/**
+*.test.*
+*.spec.*
+
+# Documentation
+docs/**
+*.md
+!README.md
+DEPLOYMENT.md
+TESTING.md
+tasks/**
+
+# IDE files
+.vscode/**
+.idea/**
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+dist/**
+build/**
+.serverless/**
+.serverless_plugins/**
+
+# Serverless offline
+.serverless-offline/**
+
+# Scripts
+scripts/**
+*.ps1
+*.sh
+
+# Test files
+test/**
+*.test.*
+*.spec.*
+
+# Dev dependencies will be excluded automatically
+# But we can also exclude node_modules and let Serverless handle it
+

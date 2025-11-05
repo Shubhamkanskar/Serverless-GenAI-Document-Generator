@@ -1,0 +1,408 @@
+service: genai-doc-generator
+
+# Note: Using Serverless Framework V4 (requires authentication)
+# To use V3 instead, uncomment the line below and install: npm install serverless@^3.38.0
+# frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  iam:
+    role: arn:aws:iam::836347236536:role/GenAIDocGeneratorLambdaRole
+  environment:
+    # AWS_REGION is automatically set by Lambda - don't set it manually
+    # ChromaDB Configuration
+    CHROMA_API_KEY: ${env:CHROMA_API_KEY, ''}
+    CHROMA_TENANT: ${env:CHROMA_TENANT, ''}
+    CHROMA_DATABASE: ${env:CHROMA_DATABASE, 'genaidoc'}
+    # Google Gemini Configuration
+    GOOGLE_API_KEY: ${env:GOOGLE_API_KEY, ''}
+    GEMINI_API_KEY: ${env:GEMINI_API_KEY, ''}
+    GEMINI_MODEL: ${env:GEMINI_MODEL, 'gemini-2.0-flash'}
+    GEMINI_EMBEDDING_DIMENSION: ${env:GEMINI_EMBEDDING_DIMENSION, '1024'}
+    # S3 Bucket Configuration
+    # Set DOCUMENTS_BUCKET or S3_DOCUMENTS_BUCKET (both will work)
+    # Serverless V4 doesn't support nested env var resolution, so set both
+    S3_DOCUMENTS_BUCKET: ${env:S3_DOCUMENTS_BUCKET, 'genai-documents-shubham'}
+    DOCUMENTS_BUCKET: ${env:DOCUMENTS_BUCKET, 'genai-documents-shubham'}
+    S3_OUTPUTS_BUCKET: ${env:S3_OUTPUTS_BUCKET, 'genai-outputs-shubham'}
+    OUTPUTS_BUCKET: ${env:OUTPUTS_BUCKET, 'genai-outputs-shubham'}
+    S3_FRONTEND_BUCKET: ${env:S3_FRONTEND_BUCKET, 'genai-frontend-shubham'}
+    FRONTEND_BUCKET: ${env:FRONTEND_BUCKET, 'genai-frontend-shubham'}
+    # Vector Database Selection (defaults to chromadb)
+    VECTOR_DB: ${env:VECTOR_DB, 'chromadb'}
+    # Langchain Integration (optional, set to 'true' to use Langchain for vector operations)
+    USE_LANGCHAIN: ${env:USE_LANGCHAIN, 'false'}
+    # Node Environment
+    NODE_ENV: ${env:NODE_ENV, 'production'}
+  apiGateway:
+    shouldStartNameWithService: true
+    # Note: API Gateway REST API has a maximum timeout of 29 seconds
+    # Lambda functions with longer timeouts (300s) will continue running after API Gateway timeout
+    # The timeout warnings during deployment are expected and can be safely ignored
+    # For long-running operations, consider implementing async patterns or polling
+    binaryMediaTypes:
+      - "multipart/form-data"
+      - "multipart/*"
+      - "application/pdf"
+
+functions:
+  upload:
+    handler: src/handlers/upload.handler
+    timeout: 300  # 5 minutes for large file uploads
+    memorySize: 1024  # 1GB for processing large files
+    events:
+      - http:
+          path: api/upload
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Accept
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+            maxAge: 86400
+
+  ingest:
+    handler: src/handlers/ingest.handler
+    timeout: 300
+    memorySize: 512
+    events:
+      - http:
+          path: api/ingest
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+
+  generate:
+    handler: src/handlers/generate.handler
+    timeout: 300
+    memorySize: 512
+    events:
+      - http:
+          path: api/generate
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+
+  generateDocument:
+    handler: src/handlers/generateDocument.handler
+    timeout: 300
+    memorySize: 512
+    events:
+      - http:
+          path: api/generate-document
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+  download:
+    handler: src/handlers/download.handler
+    timeout: 30
+    memorySize: 256
+    events:
+      - http:
+          path: api/download/{fileId}
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+
+  prompts:
+    handler: src/handlers/prompts.handler
+    timeout: 30
+    memorySize: 256
+    events:
+      - http:
+          path: api/prompts
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+      - http:
+          path: api/prompts/{useCase}
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+      - http:
+          path: api/prompts/{useCase}
+          method: put
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+      - http:
+          path: api/prompts
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+      - http:
+          path: api/prompts/reset
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+
+  promptLibrary:
+    handler: src/handlers/promptLibrary.handler
+    timeout: 30
+    memorySize: 256
+    events:
+      - http:
+          path: api/prompts/library
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+      - http:
+          path: api/prompts/library/reset
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+      - http:
+          path: api/prompts/library/{useCase}
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+      - http:
+          path: api/prompts/library/{useCase}/prompts
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+      - http:
+          path: api/prompts/library/{useCase}/{promptId}
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+      - http:
+          path: api/prompts/library/{useCase}
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+      - http:
+          path: api/prompts/library/{useCase}/{promptId}
+          method: put
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+      - http:
+          path: api/prompts/library/{useCase}/{promptId}/activate
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+      - http:
+          path: api/prompts/library/{useCase}/{promptId}
+          method: delete
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+            allowCredentials: false
+
+package:
+  individually: true
+  excludeDevDependencies: true
+  # esbuild will bundle code, so exclude node_modules and source files
+  patterns:
+    - "!node_modules/**"
+    - "!*.md"
+    - "!*.log"
+    - "!.git/**"
+    - "!.env*"
+    - "!.vscode/**"
+    - "!.idea/**"
+    - "!test/**"
+    - "!tests/**"
+    - "!*.test.js"
+    - "!*.test.ts"
+    - "!*.spec.js"
+    - "!*.spec.ts"
+    - "!docs/**"
+    # Include scripts folder - needed for postinstall patch script
+    # - "!scripts/**"
+    - "!tasks/**"
+    - "!.serverless/**"
+    - "!coverage/**"
+    - "!*.map"
+    - "!*.tsbuildinfo"
+    - "!tsconfig.json"
+    # Exclude package.json since we're using CJS format and package.json has "type": "module"
+    - "!package.json"
+    # Include .npmrc for npm configuration during deployment
+    # - "!.npmrc"
+    - "!.nvmrc"
+    - "!package-lock.json"
+    - "!yarn.lock"
+    - "!pnpm-lock.yaml"
+
+plugins:
+  - serverless-offline
+
+build:
+  esbuild:
+    bundle: true
+    minify: true
+    target: node18
+    platform: node
+    keepNames: true
+    sourcemap: false
+    format: cjs
+    external:
+      - "busboy"
+      - "pdfreader"
+      - "fs"
+      - "path"
+      - "util"
+      - "stream"
+      - "events"
+      - "buffer"
+      - "string_decoder"
+      - "module"
+      - "child_process"
+      - "os"
+      - "crypto"
+      - "http"
+      - "https"
+      - "url"
+      - "zlib"
+    exclude:
+      - "@aws-sdk/*"
+      - "aws-sdk"
+    define:
+      "require.resolve": "undefined"
+
+custom:
+  serverless-offline:
+    httpPort: 3000
+    host: localhost
