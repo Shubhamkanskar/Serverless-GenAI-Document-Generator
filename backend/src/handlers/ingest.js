@@ -1,6 +1,6 @@
 /**
  * Ingest Handler
- * Processes uploaded documents, extracts text, generates embeddings, and stores in ChromaDB
+ * Processes uploaded documents, extracts text, generates embeddings, and stores in vector database (Pinecone/ChromaDB)
  * Endpoint: POST /api/ingest
  * 
  * This handler uses async processing to avoid API Gateway 29-second timeout:
@@ -11,6 +11,8 @@
 import pdfService from '../services/pdfService.js';
 import embeddingService from '../services/embeddingService.js';
 import chromaService from '../services/chromaService.js';
+import pineconeService from '../services/pineconeService.js';
+import ingestionStatusService from '../services/ingestionStatusService.js';
 import { createSuccessResponse, createErrorResponse, handleAwsError } from '../utils/errorHandler.js';
 import { validateIngestRequest } from '../utils/validators.js';
 import { logger } from '../utils/logger.js';
@@ -36,86 +38,161 @@ const processIngestion = async (fileId, s3Key) => {
   const startTime = Date.now();
   const documentsBucket = process.env.S3_DOCUMENTS_BUCKET || process.env.DOCUMENTS_BUCKET;
 
-  // Step 1: Extract text from PDF and chunk it
-  logger.info('Step 1: Extracting text from PDF...');
-  let chunks;
   try {
-    const extractedData = await pdfService.extractTextFromS3(
-      s3Key,
-      documentsBucket,
-      { fileId, fileName: s3Key.split('/').pop() }
-    );
-
-    logger.info(`Extracted text length: ${extractedData.text.length} characters`, {
-      pages: extractedData.metadata.numPages
+    // Update status to processing
+    await ingestionStatusService.updateStatus(fileId, {
+      status: 'processing',
+      currentStep: 'extracting_text',
+      progress: 10,
+      message: 'Extracting text from PDF...'
     });
 
-    // Step 2: Split into chunks
-    logger.info('Step 2: Splitting text into chunks...');
-    chunks = pdfService.splitText(extractedData.text, {
-      fileId,
-      fileName: extractedData.metadata.fileName || s3Key.split('/').pop(),
-      numPages: extractedData.metadata.numPages,
-      s3Key,
-      extractedAt: extractedData.metadata.extractedAt
-    });
-
-    logger.info(`Created ${chunks.length} chunks`);
-  } catch (pdfError) {
-    logger.error('PDF extraction or chunking failed', pdfError);
-    throw new Error(`Failed to process PDF: ${pdfError.message}`);
-  }
-
-  // Step 3: Generate embeddings
-  logger.info('Step 3: Generating embeddings...');
-  let chunksWithEmbeddings;
-  try {
-    chunksWithEmbeddings = await embeddingService.generateEmbeddingsForChunks(chunks);
-    logger.info(`Generated ${chunksWithEmbeddings.length} embeddings`);
-  } catch (embeddingError) {
-    logger.error('Embedding generation failed', embeddingError);
-    throw new Error(`Failed to generate embeddings: ${embeddingError.message}`);
-  }
-
-  // Step 4: Store in vector database (ChromaDB or via Langchain)
-  const useLangchain = process.env.USE_LANGCHAIN === 'true';
-  logger.info(`Step 4: Storing vectors ${useLangchain ? 'via Langchain' : 'in ChromaDB'}...`);
-
-  try {
-    if (useLangchain) {
-      // Use Langchain for vector storage
-      const langchainService = (await import('../services/langchainService.js')).default;
-      await langchainService.addDocuments(chunksWithEmbeddings, fileId);
-      logger.info(`Stored ${chunksWithEmbeddings.length} vectors via Langchain`);
-    } else {
-      // Use native ChromaDB service (existing implementation)
-      const embeddings = chunksWithEmbeddings.map(chunk => chunk.embedding);
-      await chromaService.upsertChunksWithEmbeddings(
-        chunksWithEmbeddings,
-        embeddings,
-        fileId
+    // Step 1: Extract text from PDF and chunk it
+    logger.info('Step 1: Extracting text from PDF...');
+    let chunks;
+    try {
+      const extractedData = await pdfService.extractTextFromS3(
+        s3Key,
+        documentsBucket,
+        { fileId, fileName: s3Key.split('/').pop() }
       );
-      logger.info(`Stored ${chunksWithEmbeddings.length} vectors in ChromaDB`);
+
+      logger.info(`Extracted text length: ${extractedData.text.length} characters`, {
+        pages: extractedData.metadata.numPages
+      });
+
+      // Update progress
+      await ingestionStatusService.updateStatus(fileId, {
+        currentStep: 'chunking_text',
+        progress: 25,
+        message: `Extracted ${extractedData.metadata.numPages} pages, splitting into chunks...`
+      });
+
+      // Step 2: Split into chunks
+      logger.info('Step 2: Splitting text into chunks...');
+      chunks = pdfService.splitText(extractedData.text, {
+        fileId,
+        fileName: extractedData.metadata.fileName || s3Key.split('/').pop(),
+        numPages: extractedData.metadata.numPages,
+        s3Key,
+        extractedAt: extractedData.metadata.extractedAt
+      });
+
+      logger.info(`Created ${chunks.length} chunks`);
+
+      // Update progress with chunk count
+      await ingestionStatusService.updateStatus(fileId, {
+        currentStep: 'generating_embeddings',
+        progress: 35,
+        totalChunks: chunks.length,
+        processedChunks: 0,
+        message: `Created ${chunks.length} chunks, generating embeddings...`
+      });
+    } catch (pdfError) {
+      logger.error('PDF extraction or chunking failed', pdfError);
+      await ingestionStatusService.markFailed(fileId, `Failed to process PDF: ${pdfError.message}`, 'extracting_text');
+      throw new Error(`Failed to process PDF: ${pdfError.message}`);
     }
-  } catch (storageError) {
-    logger.error('Vector storage failed', storageError);
-    throw new Error(`Failed to store vectors: ${storageError.message}`);
+
+    // Step 3: Generate embeddings
+    logger.info('Step 3: Generating embeddings...');
+    let chunksWithEmbeddings;
+    try {
+      chunksWithEmbeddings = await embeddingService.generateEmbeddingsForChunks(chunks);
+      logger.info(`Generated ${chunksWithEmbeddings.length} embeddings`);
+
+      // Update progress
+      await ingestionStatusService.updateStatus(fileId, {
+        currentStep: 'storing_vectors',
+        progress: 70,
+        processedChunks: chunks.length,
+        message: `Generated ${chunksWithEmbeddings.length} embeddings, storing in vector database...`
+      });
+    } catch (embeddingError) {
+      logger.error('Embedding generation failed', embeddingError);
+      await ingestionStatusService.markFailed(fileId, `Failed to generate embeddings: ${embeddingError.message}`, 'generating_embeddings');
+      throw new Error(`Failed to generate embeddings: ${embeddingError.message}`);
+    }
+
+    // Step 4: Store in vector database (Pinecone, ChromaDB, or via Langchain)
+    const useLangchain = process.env.USE_LANGCHAIN === 'true';
+    const vectorDb = process.env.VECTOR_DB || 'chromadb';
+    
+    try {
+      if (useLangchain) {
+        // Use Langchain for vector storage
+        logger.info('Step 4: Storing vectors via Langchain...');
+        const langchainService = (await import('../services/langchainService.js')).default;
+        await langchainService.addDocuments(chunksWithEmbeddings, fileId);
+        logger.info(`Stored ${chunksWithEmbeddings.length} vectors via Langchain`);
+      } else if (vectorDb.toLowerCase() === 'pinecone') {
+        // Use native Pinecone service
+        logger.info('Step 4: Storing vectors in Pinecone...');
+        const embeddings = chunksWithEmbeddings.map(chunk => chunk.embedding);
+        await pineconeService.upsertChunksWithEmbeddings(
+          chunksWithEmbeddings,
+          embeddings,
+          fileId
+        );
+        logger.info(`Stored ${chunksWithEmbeddings.length} vectors in Pinecone`);
+      } else {
+        // Use native ChromaDB service (default)
+        logger.info('Step 4: Storing vectors in ChromaDB...');
+        const embeddings = chunksWithEmbeddings.map(chunk => chunk.embedding);
+        await chromaService.upsertChunksWithEmbeddings(
+          chunksWithEmbeddings,
+          embeddings,
+          fileId
+        );
+        logger.info(`Stored ${chunksWithEmbeddings.length} vectors in ChromaDB`);
+      }
+
+      // Update progress
+      await ingestionStatusService.updateStatus(fileId, {
+        currentStep: 'finalizing',
+        progress: 95,
+        message: 'Finalizing ingestion...'
+      });
+    } catch (storageError) {
+      logger.error('Vector storage failed', storageError);
+      await ingestionStatusService.markFailed(fileId, `Failed to store vectors: ${storageError.message}`, 'storing_vectors');
+      throw new Error(`Failed to store vectors: ${storageError.message}`);
+    }
+
+    const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
+
+    const result = {
+      fileId,
+      s3Key,
+      chunksProcessed: chunks.length,
+      status: 'success',
+      message: 'Document ingested successfully',
+      processingTime: `${processingTime}s`,
+      metadata: {
+        averageChunkSize: Math.round(chunks.reduce((sum, c) => sum + c.text.length, 0) / chunks.length),
+        totalTextLength: chunks.reduce((sum, c) => sum + c.text.length, 0)
+      }
+    };
+
+    // Mark as completed
+    await ingestionStatusService.markCompleted(fileId, {
+      chunksProcessed: chunks.length,
+      processingTime: `${processingTime}s`
+    });
+
+    return result;
+  } catch (error) {
+    // Make sure we mark as failed if not already done
+    try {
+      const status = await ingestionStatusService.getStatus(fileId);
+      if (status && status.status !== 'failed') {
+        await ingestionStatusService.markFailed(fileId, error.message, status.currentStep || 'unknown');
+      }
+    } catch (statusError) {
+      logger.error('Failed to update status on error', statusError);
+    }
+    throw error;
   }
-
-  const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
-
-  return {
-    fileId,
-    s3Key,
-    chunksProcessed: chunks.length,
-    status: 'success',
-    message: 'Document ingested successfully',
-    processingTime: `${processingTime}s`,
-    metadata: {
-      averageChunkSize: Math.round(chunks.reduce((sum, c) => sum + c.text.length, 0) / chunks.length),
-      totalTextLength: chunks.reduce((sum, c) => sum + c.text.length, 0)
-    }
-  };
 };
 
 /**
@@ -199,6 +276,16 @@ const ingestHandler = async (event, context) => {
     }
 
     logger.info(`Queuing ingestion for file: ${fileId}`, { s3Key });
+
+    // Create initial status record
+    try {
+      await ingestionStatusService.createStatus(fileId, s3Key, {
+        fileName: s3Key.split('/').pop()
+      });
+    } catch (statusError) {
+      logger.error('Failed to create initial status', statusError);
+      // Continue anyway - status tracking is not critical
+    }
 
     // Invoke Lambda asynchronously to process the ingestion
     try {

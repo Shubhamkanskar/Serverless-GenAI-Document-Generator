@@ -11,7 +11,6 @@ import {
 import { Button } from "./ui/button";
 import { MAX_FILE_SIZE } from "../utils/constants.js";
 import { useDocumentStore } from "../stores/useDocumentStore";
-import DocumentList from "./DocumentList.jsx";
 
 const FileUpload = ({ disabled = false }) => {
   // Use Zustand store instead of hook
@@ -20,8 +19,6 @@ const FileUpload = ({ disabled = false }) => {
   const ingesting = useDocumentStore((state) => state.ingesting);
   const error = useDocumentStore((state) => state.error);
   const uploadFile = useDocumentStore((state) => state.uploadFile);
-  const ingestFile = useDocumentStore((state) => state.ingestFile);
-  const removeDocument = useDocumentStore((state) => state.removeDocument);
   const clearError = useDocumentStore((state) => state.clearError);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState(null);
@@ -92,26 +89,6 @@ const FileUpload = ({ disabled = false }) => {
     multiple: false,
   });
 
-  const handleRemove = useCallback(
-    (fileId) => {
-      removeDocument(fileId);
-      setUploadError(null);
-    },
-    [removeDocument]
-  );
-
-  const handleProcess = useCallback(
-    async (fileId, s3Key) => {
-      try {
-        setUploadError(null);
-        await ingestFile(fileId, s3Key);
-      } catch (err) {
-        setUploadError(err.message || "Failed to process document");
-        console.error("Process error:", err);
-      }
-    },
-    [ingestFile]
-  );
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return "0 Bytes";
@@ -231,22 +208,7 @@ const FileUpload = ({ disabled = false }) => {
         </div>
       )}
 
-      {/* Uploaded Files List */}
-      {documents.length > 0 && (
-        <div className="space-y-2">
-          <DocumentList
-            documents={documents}
-            onRemove={handleRemove}
-            onProcess={handleProcess}
-            loading={ingesting}
-            processingIds={documents
-              .filter((d) => d.status === "processing")
-              .map((d) => d.fileId)}
-          />
-        </div>
-      )}
-
-      {/* Success Message */}
+      {/* Success Message - Only show message, not document list */}
       {documents.length > 0 &&
         !uploading &&
         !ingesting &&

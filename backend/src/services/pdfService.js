@@ -16,8 +16,9 @@ class PDFService {
     this.documentsBucket = process.env.S3_DOCUMENTS_BUCKET || process.env.DOCUMENTS_BUCKET;
     
     // Chunking configuration
-    this.chunkSize = 1500; // Increase from 1000 to 1500
-    this.chunkOverlap = 200; // Keep overlap the same
+    // Based on best practices: 1000-1500 chars with 10-20% overlap for optimal retrieval
+    this.chunkSize = 1200; // Optimal size for embeddings
+    this.chunkOverlap = 200; // ~16% overlap for context preservation
     
     logger.info('PDFService initialized', {
       region,

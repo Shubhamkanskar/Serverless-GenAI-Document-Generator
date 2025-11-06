@@ -1,15 +1,17 @@
 /**
  * Ingest Status Handler
- * Checks the processing status of a document ingestion by querying ChromaDB
+ * Checks the processing status of a document ingestion using DynamoDB
  * Endpoint: GET /api/ingest-status/{fileId}
- * 
+ *
  * Best Practices:
- * - Lightweight status check by querying vector database
- * - No additional storage needed (uses existing ChromaDB)
- * - Fast response time (< 1 second)
+ * - Fast status check using DynamoDB (< 100ms response time)
+ * - Real-time progress tracking with percentage and current step
+ * - Fallback to vector database (Pinecone/ChromaDB) if DynamoDB status not found
  */
 
+import ingestionStatusService from '../services/ingestionStatusService.js';
 import chromaService from '../services/chromaService.js';
+import pineconeService from '../services/pineconeService.js';
 import { createSuccessResponse, createErrorResponse } from '../utils/errorHandler.js';
 import { logger } from '../utils/logger.js';
 import { wrapHandler } from '../utils/handlerWrapper.js';
@@ -43,9 +45,50 @@ const ingestStatusHandler = async (event, context) => {
 
     logger.info(`Checking ingestion status for file: ${fileId}`);
 
-    // Check if document exists in ChromaDB (means processing completed)
+    // First, check DynamoDB for real-time status
+    let statusRecord = null;
+    try {
+      statusRecord = await ingestionStatusService.getStatus(fileId);
+    } catch (statusError) {
+      logger.warn('Failed to get status from DynamoDB', { fileId, error: statusError.message });
+    }
+
+    // If status found in DynamoDB, return it
+    if (statusRecord) {
+      const responseData = {
+        fileId: statusRecord.fileId,
+        status: statusRecord.status,
+        progress: statusRecord.progress || 0,
+        currentStep: statusRecord.currentStep,
+        message: statusRecord.message,
+        totalChunks: statusRecord.totalChunks || 0,
+        processedChunks: statusRecord.processedChunks || 0,
+        createdAt: statusRecord.createdAt,
+        updatedAt: statusRecord.updatedAt,
+        ...(statusRecord.elapsedTime !== undefined && { elapsedTime: statusRecord.elapsedTime }),
+        ...(statusRecord.estimatedTimeRemaining !== undefined && { estimatedTimeRemaining: statusRecord.estimatedTimeRemaining }),
+        ...(statusRecord.estimatedTotalTime !== undefined && { estimatedTotalTime: statusRecord.estimatedTotalTime }),
+        ...(statusRecord.completedAt && { completedAt: statusRecord.completedAt }),
+        ...(statusRecord.failedAt && { failedAt: statusRecord.failedAt }),
+        ...(statusRecord.error && { error: statusRecord.error })
+      };
+
+      logger.info('Ingest status from DynamoDB', {
+        fileId,
+        status: statusRecord.status,
+        progress: statusRecord.progress
+      });
+
+      return createSuccessResponse(responseData, 200);
+    }
+
+    // Fallback: Check vector database (for backward compatibility)
     const useLangchain = process.env.USE_LANGCHAIN === 'true';
-    let status = 'processing';
+    const vectorDb = process.env.VECTOR_DB || 'chromadb';
+    
+    logger.info(`Status not in DynamoDB, checking ${useLangchain ? 'Langchain' : vectorDb}...`, { fileId });
+
+    let status = 'not_found';
     let chunksCount = 0;
     let metadata = null;
     let error = null;
@@ -55,7 +98,7 @@ const ingestStatusHandler = async (event, context) => {
         // Check via Langchain
         const langchainService = (await import('../services/langchainService.js')).default;
         const results = await langchainService.queryByMetadata({ fileId }, 1);
-        
+
         if (results && results.length > 0) {
           status = 'completed';
           chunksCount = results[0].metadata?.chunksProcessed || results.length;
@@ -66,15 +109,54 @@ const ingestStatusHandler = async (event, context) => {
             totalTextLength: results[0].metadata?.totalTextLength
           };
         }
+      } else if (vectorDb.toLowerCase() === 'pinecone') {
+        // Check via Pinecone - query by metadata filter
+        try {
+          // Query with a dummy vector and filter by fileId
+          const dummyVector = new Array(1024).fill(0);
+          const results = await pineconeService.queryVectors(
+            dummyVector,
+            1,
+            { fileId: { $eq: fileId } }
+          );
+
+          if (results.matches && results.matches.length > 0) {
+            // Document exists, query for all chunks to get count
+            const allResults = await pineconeService.queryVectors(
+              dummyVector,
+              1000, // Large limit to get all chunks
+              { fileId: { $eq: fileId } }
+            );
+
+            chunksCount = allResults.matches?.length || 0;
+
+            // Extract metadata from first chunk
+            if (allResults.matches && allResults.matches.length > 0) {
+              const firstMatch = allResults.matches[0];
+              metadata = {
+                chunksProcessed: chunksCount,
+                processingTime: firstMatch.metadata?.processingTime,
+                averageChunkSize: firstMatch.metadata?.averageChunkSize,
+                totalTextLength: firstMatch.metadata?.totalTextLength,
+                fileName: firstMatch.metadata?.fileName,
+                numPages: firstMatch.metadata?.numPages
+              };
+            }
+
+            status = 'completed';
+          }
+        } catch (pineconeError) {
+          logger.warn('Error checking Pinecone status', { fileId, error: pineconeError.message });
+          throw pineconeError;
+        }
       } else {
         // Check via ChromaDB - query by metadata filter
         const collection = await chromaService.connect();
-        
+
         // Use get() with where clause to check if document exists
-        // This is faster than query() as it doesn't need embeddings
         const results = await collection.get({
           where: { fileId },
-          limit: 1 // Only need to check existence, limit to 1 for performance
+          limit: 1
         });
 
         if (results.ids && results.ids.length > 0) {
@@ -82,10 +164,10 @@ const ingestStatusHandler = async (event, context) => {
           const allResults = await collection.get({
             where: { fileId }
           });
-          
+
           chunksCount = allResults.ids?.length || 0;
-          
-          // Extract metadata from first chunk (all chunks have same file metadata)
+
+          // Extract metadata from first chunk
           if (allResults.metadatas && allResults.metadatas.length > 0) {
             const firstMetadata = allResults.metadatas[0];
             metadata = {
@@ -97,22 +179,23 @@ const ingestStatusHandler = async (event, context) => {
               numPages: firstMetadata.numPages
             };
           }
-          
+
           status = 'completed';
         }
       }
     } catch (dbError) {
-      logger.warn('Error checking ChromaDB status', { fileId, error: dbError.message });
-      // If we can't check, assume still processing (not an error state)
-      // This prevents false negatives during processing
-      status = 'processing';
-      error = 'Unable to check status. Processing may still be in progress.';
+      logger.warn(`Error checking ${vectorDb} status`, { fileId, error: dbError.message });
+      status = 'unknown';
+      error = 'Unable to check status from database.';
     }
 
     const responseData = {
       fileId,
       status,
+      progress: status === 'completed' ? 100 : 0,
+      currentStep: status === 'completed' ? 'completed' : 'unknown',
       chunksProcessed: chunksCount,
+      message: status === 'completed' ? 'Document ingested successfully' : 'Status not available',
       ...(metadata && { metadata }),
       ...(error && { warning: error })
     };

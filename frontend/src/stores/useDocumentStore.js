@@ -38,10 +38,26 @@ export const useDocumentStore = create((set, get) => ({
         s3Key: responseData.s3Key || responseData.s3_key || responseData.s3key
       };
 
-      set((state) => ({
-        documents: [...state.documents, newDocument],
-        uploading: false
-      }));
+      set((state) => {
+        // Check if document already exists (prevent duplicates by fileId)
+        const existingIndex = state.documents.findIndex(doc => doc.fileId === newDocument.fileId);
+        
+        if (existingIndex >= 0) {
+          // Update existing document instead of adding duplicate
+          const updated = [...state.documents];
+          updated[existingIndex] = { ...updated[existingIndex], ...newDocument };
+          return {
+            documents: updated,
+            uploading: false
+          };
+        }
+        
+        // Add new document if it doesn't exist
+        return {
+          documents: [...state.documents, newDocument],
+          uploading: false
+        };
+      });
 
       return newDocument;
     } catch (err) {
@@ -248,27 +264,33 @@ export const useDocumentStore = create((set, get) => ({
             throw new Error('Invalid status response');
           }
 
-          // Update document with current status
+          // Update document with current status including progress and ETA
           set((state) => {
             const updated = state.documents.map(doc => {
               if (doc.fileId === fileId) {
                 const updatedDoc = {
                   ...doc,
-                  status: statusData.status === 'completed' ? 'processed' : 'processing',
-                  chunksProcessed: statusData.chunksProcessed || doc.chunksProcessed || 0,
+                  status: statusData.status === 'completed' ? 'processed' :
+                         statusData.status === 'failed' ? 'error' : 'processing',
+                  progress: statusData.progress || 0,
+                  currentStep: statusData.currentStep,
+                  message: statusData.message,
+                  totalChunks: statusData.totalChunks || doc.totalChunks || 0,
+                  chunksProcessed: statusData.chunksProcessed || statusData.processedChunks || doc.chunksProcessed || 0,
+                  estimatedTimeRemaining: statusData.estimatedTimeRemaining,
+                  elapsedTime: statusData.elapsedTime,
+                  estimatedTotalTime: statusData.estimatedTotalTime,
                   ...(statusData.metadata && { metadata: statusData.metadata }),
-                  ...(statusData.metadata?.processingTime && { 
-                    processingTime: statusData.metadata.processingTime 
-                  })
+                  ...(statusData.completedAt && { completedAt: statusData.completedAt }),
+                  ...(statusData.error && { error: statusData.error })
                 };
 
                 // Update progress based on status
                 if (statusData.status === 'completed') {
                   updatedDoc.progress = 100;
-                } else if (statusData.chunksProcessed) {
-                  // Estimate progress based on chunks (if we had initial chunk count)
-                  // For now, keep it at a low value to show processing
-                  updatedDoc.progress = Math.min(updatedDoc.progress || 10, 90);
+                  updatedDoc.processingTime = statusData.metadata?.processingTime || statusData.processingTime;
+                } else if (statusData.status === 'failed') {
+                  updatedDoc.error = statusData.error || statusData.message;
                 }
 
                 return updatedDoc;

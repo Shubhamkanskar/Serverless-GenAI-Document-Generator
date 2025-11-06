@@ -1,9 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { AlertCircle, Sparkles, Check, Info } from 'lucide-react';
-import { Button } from './ui/button';
-import { getPromptsForUseCase } from '../services/api';
+import React, { useState, useEffect } from "react";
+import { AlertCircle, Sparkles, Check, Info } from "lucide-react";
+import { Button } from "./ui/button";
+import { getPromptsForUseCase } from "../services/api";
 
-const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className = '' }) => {
+const PromptSelector = ({
+  useCase,
+  selectedPromptId,
+  onSelectPrompt,
+  className = "",
+}) => {
   const [prompts, setPrompts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -25,18 +30,19 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
 
       // If no prompt selected, select the active one
       if (!selectedPromptId && promptsData.length > 0) {
-        const activePrompt = promptsData.find(p => p.isActive) || promptsData[0];
+        const activePrompt =
+          promptsData.find((p) => p.isActive) || promptsData[0];
         onSelectPrompt(activePrompt.id);
       }
     } catch (err) {
-      console.error('Error loading prompts:', err);
-      setError(err.message || 'Failed to load prompts');
+      console.error("Error loading prompts:", err);
+      setError(err.message || "Failed to load prompts");
     } finally {
       setLoading(false);
     }
   };
 
-  const selectedPrompt = prompts.find(p => p.id === selectedPromptId);
+  const selectedPrompt = prompts.find((p) => p.id === selectedPromptId);
 
   if (loading) {
     return (
@@ -51,14 +57,23 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
 
   if (error) {
     return (
-      <div className={`p-4 bg-destructive/10 border border-destructive/20 rounded-lg ${className}`}>
+      <div
+        className={`p-4 bg-destructive/10 border border-destructive/20 rounded-lg ${className}`}
+      >
         <div className="flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
           <div className="flex-1">
-            <p className="text-sm font-medium text-destructive">Error loading prompts</p>
+            <p className="text-sm font-medium text-destructive">
+              Error loading prompts
+            </p>
             <p className="text-xs text-destructive/80 mt-1">{error}</p>
           </div>
-          <Button variant="ghost" size="sm" onClick={loadPrompts} className="text-xs">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={loadPrompts}
+            className="text-xs"
+          >
             Retry
           </Button>
         </div>
@@ -81,7 +96,8 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
               Choose Your Generation Style
             </p>
             <p className="text-xs text-blue-800 dark:text-blue-200">
-              Select from {prompts.length} different prompt styles. Each produces a different level of detail and format.
+              Select from {prompts.length} different prompt styles. Each
+              produces a different level of detail and format.
             </p>
           </div>
         </div>
@@ -93,7 +109,7 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
           <Sparkles className="w-4 h-4 text-primary" />
           Select Prompt Style
         </label>
-        
+
         {/* Dropdown Button */}
         <button
           onClick={() => setIsOpen(!isOpen)}
@@ -115,12 +131,28 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
                 </div>
               </div>
             ) : (
-              <div className="text-sm text-muted-foreground">Select a prompt style...</div>
+              <div className="text-sm text-muted-foreground">
+                Select a prompt style...
+              </div>
             )}
           </div>
-          <div className={`ml-2 transition-transform ${isOpen ? 'rotate-180' : ''}`}>
-            <svg className="w-5 h-5 text-muted-foreground group-hover:text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          <div
+            className={`ml-2 transition-transform ${
+              isOpen ? "rotate-180" : ""
+            }`}
+          >
+            <svg
+              className="w-5 h-5 text-muted-foreground group-hover:text-foreground"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 9l-7 7-7-7"
+              />
             </svg>
           </div>
         </button>
@@ -138,8 +170,8 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
                   }}
                   className={`w-full p-3 rounded-lg text-left transition-colors ${
                     selectedPromptId === prompt.id
-                      ? 'bg-primary/10 border border-primary'
-                      : 'hover:bg-accent border border-transparent'
+                      ? "bg-primary/10 border border-primary"
+                      : "hover:bg-accent border border-transparent"
                   }`}
                 >
                   <div className="flex items-start gap-2">
@@ -151,7 +183,7 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
                             Default
                           </span>
                         )}
-                        {prompt.tags?.includes('recommended') && (
+                        {prompt.tags?.includes("recommended") && (
                           <span className="text-xs px-1.5 py-0.5 bg-green-500/10 text-green-600 dark:text-green-400 rounded">
                             ⭐ Recommended
                           </span>
@@ -162,14 +194,19 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
                       </div>
                       {prompt.tags && prompt.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-2">
-                          {prompt.tags.filter(tag => tag !== 'recommended' && tag !== 'default').map(tag => (
-                            <span 
-                              key={tag} 
-                              className="text-xs px-1.5 py-0.5 bg-muted rounded"
-                            >
-                              {tag}
-                            </span>
-                          ))}
+                          {prompt.tags
+                            .filter(
+                              (tag) =>
+                                tag !== "recommended" && tag !== "default"
+                            )
+                            .map((tag) => (
+                              <span
+                                key={tag}
+                                className="text-xs px-1.5 py-0.5 bg-muted rounded"
+                              >
+                                {tag}
+                              </span>
+                            ))}
                         </div>
                       )}
                     </div>
@@ -184,35 +221,12 @@ const PromptSelector = ({ useCase, selectedPromptId, onSelectPrompt, className =
         )}
       </div>
 
-      {/* Selected Prompt Info */}
-      {selectedPrompt && (
-        <div className="p-3 bg-muted/30 border rounded-lg">
-          <div className="flex items-start gap-2">
-            <Sparkles className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
-            <div className="flex-1 text-xs">
-              <span className="font-medium">Selected: </span>
-              <span className="text-muted-foreground">{selectedPrompt.name}</span>
-              {selectedPrompt.tags && selectedPrompt.tags.length > 0 && (
-                <span className="text-muted-foreground">
-                  {' • '}
-                  {selectedPrompt.tags.slice(0, 3).join(', ')}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Click outside to close */}
       {isOpen && (
-        <div 
-          className="fixed inset-0 z-40" 
-          onClick={() => setIsOpen(false)}
-        />
+        <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
       )}
     </div>
   );
 };
 
 export default PromptSelector;
-

@@ -54,10 +54,10 @@ const App = () => {
 
   // Debug logging
   React.useEffect(() => {
-    console.log('App render - documents:', documents);
-    console.log('App render - documents.length:', documents.length);
-    console.log('App render - processedDocuments:', processedDocuments);
-    console.log('App render - hasProcessedDocuments:', hasProcessedDocuments);
+    console.log("App render - documents:", documents);
+    console.log("App render - documents.length:", documents.length);
+    console.log("App render - processedDocuments:", processedDocuments);
+    console.log("App render - hasProcessedDocuments:", hasProcessedDocuments);
   }, [documents, processedDocuments, hasProcessedDocuments]);
 
   // Handlers
@@ -236,7 +236,7 @@ const App = () => {
 
             {/* Step 3: Select Use Case */}
             {hasProcessedDocuments && (
-              <section className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-200 border-l-4 border-purple-500 pl-4 bg-purple-50/30 dark:bg-purple-950/10 p-4 rounded-r-lg">
+              <section className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-200  pl-4 bg-purple-50/30 dark:bg-purple-950/10 p-4 rounded-r-lg">
                 <div className="flex items-center gap-3">
                   <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-500/20 dark:bg-purple-500/30 flex items-center justify-center ring-2 ring-purple-500/30">
                     <span className="text-purple-600 dark:text-purple-400 font-semibold text-sm">
@@ -266,7 +266,7 @@ const App = () => {
                     onSelect={setSelectedUseCase}
                     hasProcessedDocuments={hasProcessedDocuments}
                   />
-                  
+
                   {/* Prompt Selector - Shows after use case is selected */}
                   {selectedUseCase && (
                     <PromptSelector
@@ -280,7 +280,7 @@ const App = () => {
                   {selectedUseCase && selectedPromptId && (
                     <ActivePromptInfo useCase={selectedUseCase} />
                   )}
-                  
+
                   {/* Info about what happens next */}
                   {selectedUseCase && selectedPromptId && (
                     <div className="mt-4 p-4 bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800 rounded-lg">
@@ -298,7 +298,6 @@ const App = () => {
                 </div>
               </section>
             )}
-
 
             {/* Step 4: Generate Document */}
             {hasProcessedDocuments && selectedUseCase && selectedPromptId && (
@@ -318,7 +317,6 @@ const App = () => {
                       {selectedUseCase === "checksheet"
                         ? "an Excel checksheet with inspection points"
                         : "a Word document with step-by-step work instructions"}
-                      . This may take 30-60 seconds.
                     </p>
                   </div>
                 </div>

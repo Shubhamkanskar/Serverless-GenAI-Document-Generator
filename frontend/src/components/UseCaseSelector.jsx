@@ -1,28 +1,32 @@
-import React from 'react';
-import { ClipboardCheck, FileText, AlertCircle } from 'lucide-react';
-import { USE_CASES } from '../utils/constants.js';
+import React from "react";
+import { ClipboardCheck, FileText, AlertCircle } from "lucide-react";
+import { USE_CASES } from "../utils/constants.js";
 
-const UseCaseSelector = ({ 
-  selectedUseCase, 
-  onSelect, 
+const UseCaseSelector = ({
+  selectedUseCase,
+  onSelect,
   disabled = false,
-  hasProcessedDocuments = false 
+  hasProcessedDocuments = false,
 }) => {
   const useCases = [
     {
       value: USE_CASES.CHECKSHEET,
-      label: 'Checksheet',
-      description: 'Generate a structured checksheet with verification points and validation criteria from your uploaded documents.',
+      label: "Checksheet",
+      description:
+        "Generate a structured checksheet with verification points and validation criteria from your uploaded documents.",
       icon: ClipboardCheck,
-      longDescription: 'Create a comprehensive checksheet that includes verification points, validation criteria, and step-by-step check items extracted from your documents.'
+      longDescription:
+        "Create a comprehensive checksheet that includes verification points, validation criteria, and step-by-step check items extracted from your documents.",
     },
     {
       value: USE_CASES.WORK_INSTRUCTIONS,
-      label: 'Work Instructions',
-      description: 'Generate detailed work instructions with procedures, steps, and guidelines from your uploaded documents.',
+      label: "Work Instructions",
+      description:
+        "Generate detailed work instructions with procedures, steps, and guidelines from your uploaded documents.",
       icon: FileText,
-      longDescription: 'Generate detailed work instructions that include procedures, step-by-step instructions, safety guidelines, and operational requirements from your documents.'
-    }
+      longDescription:
+        "Generate detailed work instructions that include procedures, step-by-step instructions, safety guidelines, and operational requirements from your documents.",
+    },
   ];
 
   const isDisabled = disabled || !hasProcessedDocuments;
@@ -58,13 +62,18 @@ const UseCaseSelector = ({
               disabled={isDisabled}
               className={`
                 relative p-5 border-2 rounded-lg text-left transition-all duration-200
-                ${isActive
-                  ? 'border-primary bg-primary/10 ring-2 ring-primary/20 shadow-sm'
-                  : isDisabled
-                    ? 'border-border/50 bg-muted/30'
-                    : 'border-border hover:border-primary/50 hover:bg-accent/50 hover:shadow-sm'
+                ${
+                  isActive
+                    ? "border-primary bg-primary/10 ring-2 ring-primary/20 shadow-sm"
+                    : isDisabled
+                    ? "border-border/50 bg-muted/30"
+                    : "border-border hover:border-primary/50 hover:bg-accent/50 hover:shadow-sm"
                 }
-                ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
+                ${
+                  isDisabled
+                    ? "opacity-60 cursor-not-allowed"
+                    : "cursor-pointer"
+                }
                 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2
               `}
               aria-label={`Select ${useCase.label} use case`}
@@ -72,23 +81,28 @@ const UseCaseSelector = ({
               aria-disabled={isDisabled}
             >
               <div className="flex items-start gap-3">
-                <div className={`
+                <div
+                  className={`
                   flex-shrink-0 p-2 rounded-lg transition-colors
-                  ${isActive
-                    ? 'bg-primary text-primary-foreground'
-                    : isDisabled
-                      ? 'bg-muted text-muted-foreground'
-                      : 'bg-secondary text-secondary-foreground'
+                  ${
+                    isActive
+                      ? "bg-primary text-primary-foreground"
+                      : isDisabled
+                      ? "bg-muted text-muted-foreground"
+                      : "bg-secondary text-secondary-foreground"
                   }
-                `}>
+                `}
+                >
                   <Icon className="w-5 h-5" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <h3 className={`
+                    <h3
+                      className={`
                       font-semibold text-base
-                      ${isActive ? 'text-primary' : 'text-foreground'}
-                    `}>
+                      ${isActive ? "text-primary" : "text-foreground"}
+                    `}
+                    >
                       {useCase.label}
                     </h3>
                     {isSelected && !isDisabled && (
@@ -97,10 +111,16 @@ const UseCaseSelector = ({
                       </span>
                     )}
                   </div>
-                  <p className={`
+                  <p
+                    className={`
                     text-sm leading-relaxed
-                    ${isDisabled ? 'text-muted-foreground/70' : 'text-muted-foreground'}
-                  `}>
+                    ${
+                      isDisabled
+                        ? "text-muted-foreground/70"
+                        : "text-muted-foreground"
+                    }
+                  `}
+                  >
                     {useCase.description}
                   </p>
                 </div>
@@ -114,17 +134,8 @@ const UseCaseSelector = ({
           );
         })}
       </div>
-      {selectedUseCase && !isDisabled && (
-        <div className="mt-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
-          <p className="text-sm text-muted-foreground">
-            <span className="font-medium text-foreground">Selected:</span>{' '}
-            {useCases.find(uc => uc.value === selectedUseCase)?.longDescription}
-          </p>
-        </div>
-      )}
     </div>
   );
 };
 
 export default UseCaseSelector;
-

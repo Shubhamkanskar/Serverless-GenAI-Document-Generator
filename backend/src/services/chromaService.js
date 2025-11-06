@@ -34,14 +34,15 @@ class ChromaService {
   }
 
   /**
-   * Upsert chunks with embeddings to ChromaDB
+   * Upsert chunks with embeddings to ChromaDB in batches
    * @param {Array} chunks - Array of text chunks
    * @param {Array} embeddings - Array of embedding vectors
    * @param {string} fileId - File identifier
    * @param {string} namespace - Optional namespace (ChromaDB uses collections instead)
+   * @param {number} batchSize - Batch size for upsert (default: 100)
    * @returns {Promise<Object>} Upsert result
    */
-  async upsertChunksWithEmbeddings(chunks, embeddings, fileId, namespace = '') {
+  async upsertChunksWithEmbeddings(chunks, embeddings, fileId, namespace = '', batchSize = 100) {
     try {
       if (!chunks || chunks.length === 0) {
         throw new Error('Chunks must be a non-empty array');
@@ -55,72 +56,118 @@ class ChromaService {
 
       const collection = await this.connect();
 
-      // Format data for ChromaDB
-      const ids = [];
-      const documents = [];
-      const metadatas = [];
+      // Adaptive batch size for large document sets
+      let adaptiveBatchSize = batchSize;
+      if (chunks.length > 1000) {
+        adaptiveBatchSize = Math.min(batchSize, 50); // Smaller batches for very large docs
+        logger.info('Large document detected, using smaller batch size', {
+          totalChunks: chunks.length,
+          batchSize: adaptiveBatchSize
+        });
+      }
 
-      chunks.forEach((chunk, index) => {
-        const chunkText = typeof chunk === 'string' ? chunk : chunk.text;
-        const chunkMetadata = typeof chunk === 'string' ? {} : chunk;
+      let totalUpserted = 0;
+      const totalBatches = Math.ceil(chunks.length / adaptiveBatchSize);
 
-        // Generate unique ID
-        const chunkId = `${fileId}-chunk-${index}`;
-        ids.push(chunkId);
+      logger.info('Starting batched upsert to ChromaDB', {
+        totalChunks: chunks.length,
+        batchSize: adaptiveBatchSize,
+        totalBatches,
+        fileId
+      });
 
-        // Add document text
-        documents.push(chunkText);
+      // Process in batches to avoid timeouts and memory issues
+      for (let i = 0; i < chunks.length; i += adaptiveBatchSize) {
+        const batchChunks = chunks.slice(i, i + adaptiveBatchSize);
+        const batchEmbeddings = embeddings.slice(i, i + adaptiveBatchSize);
+        const batchIndex = Math.floor(i / adaptiveBatchSize) + 1;
 
-        // Filter metadata (ChromaDB supports string, number, boolean, null)
-        const filteredMetadata = {
-          fileId,
-          chunkIndex: index,
-          text: chunkText.substring(0, 1000) // Limit text in metadata
-        };
+        // Format data for ChromaDB
+        const ids = [];
+        const documents = [];
+        const metadatas = [];
 
-        // Add compatible metadata fields
-        for (const [key, value] of Object.entries(chunkMetadata)) {
-          if (key === 'embedding' || key === 'text') {
-            continue; // Skip embedding and text (already in documents)
-          }
+        batchChunks.forEach((chunk, index) => {
+          const globalIndex = i + index;
+          const chunkText = typeof chunk === 'string' ? chunk : chunk.text;
+          const chunkMetadata = typeof chunk === 'string' ? {} : chunk;
 
-          if (value === null || value === undefined) {
-            continue;
-          }
+          // Generate unique ID
+          const chunkId = `${fileId}-chunk-${globalIndex}`;
+          ids.push(chunkId);
 
-          if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-            filteredMetadata[key] = value;
-          } else if (typeof value === 'object') {
-            // Convert objects to strings
-            try {
-              filteredMetadata[key] = JSON.stringify(value);
-            } catch (e) {
-              logger.warn(`Skipping metadata field ${key}: cannot convert to string`);
+          // Add document text
+          documents.push(chunkText);
+
+          // Filter metadata (ChromaDB supports string, number, boolean, null)
+          const filteredMetadata = {
+            fileId,
+            chunkIndex: globalIndex,
+            text: chunkText.substring(0, 1000) // Limit text in metadata
+          };
+
+          // Add compatible metadata fields
+          for (const [key, value] of Object.entries(chunkMetadata)) {
+            if (key === 'embedding' || key === 'text') {
+              continue; // Skip embedding and text (already in documents)
+            }
+
+            if (value === null || value === undefined) {
+              continue;
+            }
+
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+              filteredMetadata[key] = value;
+            } else if (typeof value === 'object') {
+              // Convert objects to strings
+              try {
+                filteredMetadata[key] = JSON.stringify(value);
+              } catch (e) {
+                logger.warn(`Skipping metadata field ${key}: cannot convert to string`);
+              }
             }
           }
+
+          metadatas.push(filteredMetadata);
+        });
+
+        // Upsert batch to ChromaDB
+        await collection.upsert({
+          ids,
+          documents,
+          metadatas,
+          embeddings: batchEmbeddings
+        });
+
+        totalUpserted += batchChunks.length;
+
+        // Log progress every 10 batches or on last batch
+        if (batchIndex % 10 === 0 || i + adaptiveBatchSize >= chunks.length) {
+          logger.info('ChromaDB upsert progress', {
+            batchIndex,
+            processed: totalUpserted,
+            total: chunks.length,
+            percentage: Math.round((totalUpserted / chunks.length) * 100),
+            fileId
+          });
         }
 
-        metadatas.push(filteredMetadata);
-      });
+        // Small delay between batches to prevent overwhelming ChromaDB
+        if (i + adaptiveBatchSize < chunks.length) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
 
-      // Upsert to ChromaDB
-      // ChromaDB will automatically generate embeddings using the Gemini embedding function
-      // But we can also provide pre-generated embeddings for better control
-      await collection.upsert({
-        ids,
-        documents,
-        metadatas,
-        embeddings: embeddings // Provide pre-generated embeddings (optional, ChromaDB will generate if not provided)
-      });
-
-      logger.info(`Upserted ${chunks.length} vectors to ChromaDB`, {
+      logger.info(`Upserted ${totalUpserted} vectors to ChromaDB`, {
         fileId,
-        collectionName: this.collectionName
+        collectionName: this.collectionName,
+        totalBatches
       });
 
       return {
-        upsertedCount: chunks.length,
-        collectionName: this.collectionName
+        upsertedCount: totalUpserted,
+        collectionName: this.collectionName,
+        batchesProcessed: totalBatches
       };
     } catch (error) {
       logger.error('ChromaDB upsert failed', error);

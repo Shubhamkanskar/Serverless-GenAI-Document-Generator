@@ -39,8 +39,13 @@ class RateLimiter {
   }
 }
 
-// Gemini free tier: 15 RPM, so we limit to 10 RPM to be safe
-export const geminiRateLimiter = new RateLimiter(10, 60000);
+// Gemini API rate limits:
+// - Free tier: 15 RPM (requests per minute)
+// - Paid tiers: 60 RPM, 300 RPM, or higher depending on tier
+// Default to 50 RPM to be safe for most paid tiers, but allow override via env var
+// Set GEMINI_RATE_LIMIT_RPM to customize (e.g., 10 for free tier, 50 for paid tier)
+const rateLimitRPM = parseInt(process.env.GEMINI_RATE_LIMIT_RPM) || 50;
+export const geminiRateLimiter = new RateLimiter(rateLimitRPM, 60000);
 
 export default RateLimiter;
 

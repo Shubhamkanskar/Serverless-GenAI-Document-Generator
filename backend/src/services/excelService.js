@@ -9,7 +9,7 @@ import { logger } from '../utils/logger.js';
 
 class ExcelService {
   /**
-   * Generate Excel checksheet from structured data
+   * Generate Excel checksheet from structured data with frequency-based tabs
    * @param {Array|Object} data - Checksheet data (array of items or object with items array)
    * @param {string} fileName - Optional file name for metadata
    * @returns {Promise<Buffer>} Excel file buffer
@@ -26,7 +26,7 @@ class ExcelService {
         throw new Error('Checksheet data must be a non-empty array or contain a non-empty items array');
       }
 
-      logger.info(`Generating Excel checksheet with ${items.length} items`, { fileName });
+      logger.info(`Generating Excel checksheet with ${items.length} items organized by frequency`, { fileName });
 
       // Create workbook
       const workbook = new ExcelJS.Workbook();
@@ -34,10 +34,91 @@ class ExcelService {
       workbook.created = new Date();
       workbook.modified = new Date();
 
-      // Create worksheet
-      const worksheet = workbook.addWorksheet('Inspection Checksheet', {
-        properties: { tabColor: { argb: 'FF4472C4' } }
+      // Group items by frequency
+      const frequencyGroups = {
+        daily: [],
+        weekly: [],
+        monthly: [],
+        quarterly: [],
+        annually: [],
+        yearly: [],
+        other: []
+      };
+
+      items.forEach((item) => {
+        const freq = (item.frequency || '').toLowerCase().trim();
+        if (freq.includes('daily')) {
+          frequencyGroups.daily.push(item);
+        } else if (freq.includes('weekly')) {
+          frequencyGroups.weekly.push(item);
+        } else if (freq.includes('monthly')) {
+          frequencyGroups.monthly.push(item);
+        } else if (freq.includes('quarterly') || freq.includes('quarter')) {
+          frequencyGroups.quarterly.push(item);
+        } else if (freq.includes('annual') || freq.includes('yearly') || freq.includes('year')) {
+          frequencyGroups.annually.push(item);
+        } else {
+          frequencyGroups.other.push(item);
+        }
       });
+
+      // Define frequency order and tab names
+      const frequencyOrder = [
+        { key: 'daily', name: 'Daily', color: 'FFFFC7CE' }, // Red
+        { key: 'weekly', name: 'Weekly', color: 'FFFFEB9C' }, // Yellow
+        { key: 'monthly', name: 'Monthly', color: 'FFC6EFCE' }, // Green
+        { key: 'quarterly', name: 'Quarterly', color: 'FFD9E1F2' }, // Light blue
+        { key: 'annually', name: 'Annually', color: 'FFC6E0F4' }, // Blue
+        { key: 'other', name: 'Other', color: 'FFE7E6E6' } // Gray
+      ];
+
+      // Create worksheets for each frequency that has items
+      frequencyOrder.forEach((freqConfig) => {
+        const freqItems = frequencyGroups[freqConfig.key];
+        if (freqItems.length > 0) {
+          this.createFrequencyWorksheet(workbook, freqConfig.name, freqItems, freqConfig.color);
+        }
+      });
+
+      // If no items were categorized, create a default "All Items" sheet
+      if (items.length > 0 && Object.values(frequencyGroups).every(group => group.length === 0)) {
+        this.createFrequencyWorksheet(workbook, 'All Items', items, 'FF4472C4');
+      }
+
+      logger.info('Excel checksheet with frequency tabs generated', {
+        fileName,
+        totalItems: items.length,
+        sheets: workbook.worksheets.map(ws => ({ name: ws.name, itemCount: ws.rowCount - 4 }))
+      });
+
+      // Generate buffer
+      const buffer = await workbook.xlsx.writeBuffer();
+      
+      logger.info('Excel checksheet generated successfully', {
+        fileName,
+        itemCount: items.length,
+        bufferSize: buffer.length,
+        sheetCount: workbook.worksheets.length
+      });
+
+      return buffer;
+    } catch (error) {
+      logger.error('Excel generation failed', error);
+      throw new Error(`Failed to generate Excel file: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create a worksheet for a specific frequency
+   * @param {ExcelJS.Workbook} workbook - Workbook instance
+   * @param {string} sheetName - Name of the worksheet
+   * @param {Array} items - Items for this frequency
+   * @param {string} tabColor - Tab color in ARGB format
+   */
+  createFrequencyWorksheet(workbook, sheetName, items, tabColor) {
+    const worksheet = workbook.addWorksheet(sheetName, {
+      properties: { tabColor: { argb: tabColor } }
+    });
 
       // Add title row
       worksheet.mergeCells('A1:G1');
@@ -109,7 +190,7 @@ class ExcelService {
           number: index + 1,
           itemName: item.itemName || item.name || '',
           inspectionPoint: item.inspectionPoint || item.inspection || '',
-          frequency: item.frequency || '',
+          frequency: item.frequency || sheetName, // Use sheet name as frequency if not specified
           expectedStatus: item.expectedStatus || item.status || '',
           notes: item.notes || item.note || '',
           status: '' // Empty for user to fill
@@ -144,17 +225,8 @@ class ExcelService {
         row.getCell('status').alignment = { horizontal: 'center', vertical: 'middle' };
         row.getCell('expectedStatus').alignment = { horizontal: 'center', vertical: 'middle' };
 
-        // Color code frequency
-        const freq = (item.frequency || '').toLowerCase();
-        if (freq.includes('daily')) {
-          row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
-        } else if (freq.includes('weekly')) {
-          row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEB9C' } };
-        } else if (freq.includes('monthly')) {
-          row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
-        } else if (freq.includes('annual') || freq.includes('yearly')) {
-          row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6E0F4' } };
-        }
+        // Color code frequency cell with tab color
+        row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: tabColor } };
 
         // Wrap text in inspection point and notes
         row.getCell('inspectionPoint').alignment = { wrapText: true, vertical: 'top' };
@@ -210,7 +282,7 @@ class ExcelService {
       const lastRow = items.length + 5;
       worksheet.mergeCells(`A${lastRow}:G${lastRow}`);
       const legendCell = worksheet.getCell(`A${lastRow}`);
-      legendCell.value = '💡 Instructions: Fill in "Actual Status" column during inspection. Use dropdown for status (✓ Pass / ✗ Fail / ⚠ Issue / N/A). Color codes - Daily: Red, Weekly: Yellow, Monthly: Green, Annual: Blue';
+      legendCell.value = `💡 Instructions: Fill in "Actual Status" column during inspection. Use dropdown for status (✓ Pass / ✗ Fail / ⚠ Issue / N/A). This sheet contains ${sheetName.toLowerCase()} inspection items.`;
       legendCell.font = { italic: true, size: 9, color: { argb: 'FF666666' } };
       legendCell.alignment = { horizontal: 'center', wrapText: true };
       legendCell.fill = {
@@ -226,21 +298,6 @@ class ExcelService {
           column.width = Math.max(column.width || 10, 10);
         }
       });
-
-      // Generate buffer
-      const buffer = await workbook.xlsx.writeBuffer();
-      
-      logger.info('Excel checksheet generated successfully', {
-        fileName,
-        itemCount: items.length,
-        bufferSize: buffer.length
-      });
-
-      return buffer;
-    } catch (error) {
-      logger.error('Excel generation failed', error);
-      throw new Error(`Failed to generate Excel file: ${error.message}`);
-    }
   }
 
   /**

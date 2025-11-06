@@ -1,12 +1,19 @@
-import React from 'react';
-import { Download, CheckCircle2, ExternalLink, File, RotateCcw, AlertCircle } from 'lucide-react';
-import { Button } from './ui/button';
+import React from "react";
+import {
+  Download,
+  CheckCircle2,
+  ExternalLink,
+  File,
+  RotateCcw,
+  AlertCircle,
+} from "lucide-react";
+import { Button } from "./ui/button";
 
-const DownloadSection = ({ 
-  generatedFile, 
+const DownloadSection = ({
+  generatedFile,
   onReset,
   onDownload,
-  error = null 
+  error = null,
 }) => {
   if (error) {
     return (
@@ -17,9 +24,7 @@ const DownloadSection = ({
             <h3 className="font-semibold text-destructive mb-1">
               Generation Failed
             </h3>
-            <p className="text-sm text-destructive/80 mb-4">
-              {error}
-            </p>
+            <p className="text-sm text-destructive/80 mb-4">{error}</p>
             {onReset && (
               <Button
                 variant="outline"
@@ -43,24 +48,26 @@ const DownloadSection = ({
   const { downloadUrl, fileName, fileSize, fileType, fileId } = generatedFile;
 
   const formatFileSize = (bytes) => {
-    if (!bytes) return 'Unknown size';
-    if (bytes === 0) return '0 Bytes';
+    if (!bytes) return "Unknown size";
+    if (bytes === 0) return "0 Bytes";
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const sizes = ["Bytes", "KB", "MB", "GB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
   };
 
   const getFileTypeLabel = (type) => {
-    if (!type) return 'Unknown';
+    if (!type) return "Unknown";
     const typeMap = {
-      'application/pdf': 'PDF',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOCX',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'XLSX',
-      'application/msword': 'DOC',
-      'text/plain': 'TXT'
+      "application/pdf": "PDF",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        "DOCX",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        "XLSX",
+      "application/msword": "DOC",
+      "text/plain": "TXT",
     };
-    return typeMap[type] || type.split('/').pop().toUpperCase();
+    return typeMap[type] || type.split("/").pop().toUpperCase();
   };
 
   const handleDownload = () => {
@@ -68,10 +75,10 @@ const DownloadSection = ({
       onDownload();
     } else {
       // Fallback: trigger download
-      const link = document.createElement('a');
+      const link = document.createElement("a");
       link.href = downloadUrl;
-      link.download = fileName || 'generated-document';
-      link.target = '_blank';
+      link.download = fileName || "generated-document";
+      link.target = "_blank";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -81,22 +88,26 @@ const DownloadSection = ({
   const handlePreview = () => {
     // For Excel and DOCX files, use Office Online Viewer
     // For PDF files, open directly
-    const fileExtension = fileName?.split('.').pop()?.toLowerCase();
-    
-    if (fileExtension === 'xlsx' || fileExtension === 'xls') {
+    const fileExtension = fileName?.split(".").pop()?.toLowerCase();
+
+    if (fileExtension === "xlsx" || fileExtension === "xls") {
       // Excel preview using Office Online Viewer
-      const officeViewerUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(downloadUrl)}`;
-      window.open(officeViewerUrl, '_blank', 'noopener,noreferrer');
-    } else if (fileExtension === 'docx' || fileExtension === 'doc') {
+      const officeViewerUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(
+        downloadUrl
+      )}`;
+      window.open(officeViewerUrl, "_blank", "noopener,noreferrer");
+    } else if (fileExtension === "docx" || fileExtension === "doc") {
       // Word preview using Office Online Viewer
-      const officeViewerUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(downloadUrl)}`;
-      window.open(officeViewerUrl, '_blank', 'noopener,noreferrer');
-    } else if (fileExtension === 'pdf') {
+      const officeViewerUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(
+        downloadUrl
+      )}`;
+      window.open(officeViewerUrl, "_blank", "noopener,noreferrer");
+    } else if (fileExtension === "pdf") {
       // PDF can open directly
-      window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+      window.open(downloadUrl, "_blank", "noopener,noreferrer");
     } else {
       // Fallback: try to open directly
-      window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+      window.open(downloadUrl, "_blank", "noopener,noreferrer");
     }
   };
 
@@ -124,26 +135,12 @@ const DownloadSection = ({
                 <div className="space-y-2">
                   {/* File Name */}
                   <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-0.5">File Name</p>
-                    <p className="text-sm font-semibold text-foreground truncate">
-                      {fileName || 'Generated Document'}
+                    <p className="text-xs font-medium text-muted-foreground mb-0.5">
+                      File Name
                     </p>
-                  </div>
-
-                  {/* File Info Grid */}
-                  <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border">
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-0.5">File Type</p>
-                      <p className="text-sm text-foreground">
-                        {getFileTypeLabel(fileType)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-0.5">File Size</p>
-                      <p className="text-sm text-foreground">
-                        {formatFileSize(fileSize)}
-                      </p>
-                    </div>
+                    <p className="text-sm font-semibold text-foreground truncate">
+                      {fileName || "Generated Document"}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -188,4 +185,3 @@ const DownloadSection = ({
 };
 
 export default DownloadSection;
-

@@ -180,6 +180,15 @@ export const generateDocument = async (useCase, documentIds, llmProvider = 'gemi
   return api.post('/generate-document', { useCase, documentIds, llmProvider, promptId });
 };
 
+/**
+ * Check generation status for a document generation request
+ * @param {string} generationId - Generation ID to check status for
+ * @returns {Promise<Object>} Status response with progress, ETA, and downloadUrl
+ */
+export const checkGenerationStatus = async (generationId) => {
+  return api.get(`/generation-status/${generationId}`);
+};
+
 export const getDownloadUrl = async (fileId) => {
   return api.get(`/download/${fileId}`);
 };

@@ -5,12 +5,360 @@
  */
 
 import chromaService from '../services/chromaService.js';
+import pineconeService from '../services/pineconeService.js';
 import geminiService from '../services/geminiService.js';
 import bedrockService from '../services/bedrockService.js';
 import embeddingService from '../services/embeddingService.js';
 import { generateChecksheetPrompt, generateWorkInstructionsPrompt } from '../config/prompts.js';
 import { getPrompt } from '../services/promptLibraryService.js';
 import { logger } from '../utils/logger.js';
+
+/**
+ * Split context into multiple smaller chunks to avoid token limit
+ * Uses aggressive chunking: many small chunks = very small responses
+ * @param {string} context - Full context string
+ * @param {number} targetChunkSize - Target size per chunk in characters (default: 500)
+ * @returns {Array<string>} Array of context chunks
+ */
+const splitContextIntoChunks = (context, targetChunkSize = 300) => {
+  const totalLength = context.length;
+  const numChunks = Math.max(15, Math.ceil(totalLength / targetChunkSize)); // Minimum 15 chunks
+  
+  const chunkSize = Math.ceil(totalLength / numChunks);
+  
+  const chunks = [];
+  for (let i = 0; i < numChunks; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize, totalLength);
+    const chunk = context.substring(start, end);
+    if (chunk.trim().length > 0) {
+      chunks.push(chunk);
+    }
+  }
+  
+  logger.info(`Split context into ${chunks.length} chunks (target: ${targetChunkSize} chars per chunk)`, {
+    totalLength,
+    avgChunkSize: Math.round(totalLength / chunks.length),
+    minChunkSize: Math.min(...chunks.map(c => c.length)),
+    maxChunkSize: Math.max(...chunks.map(c => c.length))
+  });
+  
+  return chunks;
+};
+
+/**
+ * Generate checksheet content using chunked generation (multiple requests)
+ * @param {Array<string>} contextChunks - Array of context chunks
+ * @param {Object} promptConfig - Prompt configuration
+ * @param {string} llmProvider - LLM provider
+ * @param {Function} onProgress - Optional progress callback
+ * @returns {Promise<Array>} Merged checksheet items array
+ */
+const generateChecksheetChunked = async (contextChunks, promptConfig, llmProvider, onProgress) => {
+  const allItems = [];
+  const totalChunks = contextChunks.length;
+  
+  // Use close to maximum tokens (8000) to allow full responses while keeping prompts strict
+  // Strict prompts ensure responses stay small naturally
+  const maxTokensPerChunk = 8000;
+  
+  // Limit items per chunk to prevent excessive response size
+  const maxItemsPerChunk = 8; // Generate max 8 items per chunk to keep responses small
+
+  for (let i = 0; i < contextChunks.length; i++) {
+    const chunk = contextChunks[i];
+    logger.info(`Generating checksheet chunk ${i + 1}/${totalChunks} (chunk size: ${chunk.length} chars, max ${maxItemsPerChunk} items)...`);
+    
+    if (onProgress) {
+      onProgress({
+        step: `generating_checksheet_chunk_${i + 1}`,
+        progress: Math.round((i / totalChunks) * 30 + 10), // 10-40% range
+        message: `Generating checksheet section ${i + 1} of ${totalChunks}...`
+      });
+    }
+
+    try {
+      // Create prompt with explicit item limit and strict size constraints
+      const chunkPrompt = promptConfig.user
+        .replace('{context}', chunk)
+        .replace('Extract the most important', `CRITICAL: Generate EXACTLY ${maxItemsPerChunk} items maximum. Extract the ${maxItemsPerChunk} most important`)
+        .replace('Keep the response concise', 'Keep response VERY concise - each item should be 1-2 sentences max. Limit notes to 10 words or less.');
+      
+      const chunkPromptConfig = {
+        system: promptConfig.system + `\n\nCRITICAL CONSTRAINTS:\n- Maximum ${maxItemsPerChunk} items in response\n- Keep each item VERY brief (itemName: 3 words max, inspectionPoint: 1 sentence max, notes: max 5 words)\n- Return ONLY the JSON array, no explanations\n- Example: [{"itemName": "Short Name", "inspectionPoint": "One sentence.", "frequency": "Monthly", "expectedStatus": "OK", "notes": "Brief"}]`,
+        user: chunkPrompt
+      };
+
+      // Generate this chunk with aggressive token limit
+      let chunkData;
+      if (llmProvider === 'bedrock') {
+        chunkData = await bedrockService.invokeAndParseJSON(
+          chunkPromptConfig.system,
+          chunkPromptConfig.user,
+          {
+            temperature: 0.3,
+            maxTokens: maxTokensPerChunk
+          }
+        );
+      } else {
+        // Explicitly pass maxTokens to ensure it's used
+        chunkData = await geminiService.invokeAndParseJSON(
+          chunkPromptConfig.system,
+          chunkPromptConfig.user,
+          {
+            temperature: 0.3,
+            maxTokens: maxTokensPerChunk // Use 4000 instead of 8192
+          }
+        );
+      }
+
+      // Extract items from chunk response
+      const chunkItems = Array.isArray(chunkData) ? chunkData : (chunkData.items || chunkData.data || []);
+      
+      // Limit items if somehow more were generated
+      const limitedItems = Array.isArray(chunkItems) ? chunkItems.slice(0, maxItemsPerChunk) : [];
+      
+      if (limitedItems.length > 0) {
+        allItems.push(...limitedItems);
+        logger.info(`Chunk ${i + 1}/${totalChunks} generated ${limitedItems.length} items successfully`);
+      } else {
+        logger.warn(`Chunk ${i + 1}/${totalChunks} returned no items`);
+      }
+    } catch (error) {
+      logger.error(`Chunk ${i + 1}/${totalChunks} failed`, {
+        error: error.message,
+        chunkSize: chunk.length,
+        stack: error.stack
+      });
+      // Re-throw with context about which chunk failed
+      throw new Error(`Failed to generate checksheet chunk ${i + 1} of ${totalChunks}: ${error.message}`);
+    }
+  }
+
+  logger.info(`Chunked generation complete: ${allItems.length} total items from ${totalChunks} chunks`);
+  return allItems;
+};
+
+/**
+ * Generate work instructions content using chunked generation (multiple requests)
+ * @param {Array<string>} contextChunks - Array of context chunks
+ * @param {Object} promptConfig - Prompt configuration
+ * @param {string} llmProvider - LLM provider
+ * @param {Function} onProgress - Optional progress callback
+ * @returns {Promise<Object>} Merged work instructions object
+ */
+const generateWorkInstructionsChunked = async (contextChunks, promptConfig, llmProvider, onProgress) => {
+  const mergedResult = {
+    title: null,
+    overview: null,
+    prerequisites: { tools: [], materials: [], safety: [] },
+    steps: [],
+    safetyWarnings: [],
+    completionChecklist: []
+  };
+
+  const totalChunks = contextChunks.length;
+  
+  // Use close to maximum tokens (8000) to allow full responses while keeping prompts strict
+  // Strict prompts ensure responses stay small naturally
+  const maxTokensPerChunk = 8000;
+  
+  // Limit sections per chunk to prevent excessive response size
+  const maxStepsPerChunk = 2; // Generate max 2 steps per chunk to keep responses small
+
+  // Process all chunks uniformly
+  // First chunk: Try to get overview/prerequisites
+  // Middle chunks: Generate steps
+  // Last chunk: Try to get safety/completion
+  // But if any chunk fails, we'll still have partial data
+
+  for (let i = 0; i < contextChunks.length; i++) {
+    const chunk = contextChunks[i];
+    const chunkIndex = i + 1;
+    const isFirstChunk = i === 0;
+    const isLastChunk = i === contextChunks.length - 1;
+    
+    logger.info(`Generating work instructions chunk ${chunkIndex}/${totalChunks} (chunk size: ${chunk.length} chars)...`);
+    
+    if (onProgress) {
+      onProgress({
+        step: `generating_work_instructions_chunk_${chunkIndex}`,
+        progress: Math.round((i / totalChunks) * 50 + 10), // 10-60% range
+        message: `Generating work instructions section ${chunkIndex} of ${totalChunks}...`
+      });
+    }
+
+    try {
+      // Determine what to request from this chunk
+      let chunkPrompt, chunkSystemPrompt;
+      
+      if (isFirstChunk && !mergedResult.title) {
+        // First chunk: Try to get ONLY title and overview (keep it minimal)
+        chunkPrompt = promptConfig.user
+          .replace('{context}', chunk)
+          .replace('Create concise step-by-step work instructions.', 'Create ONLY the title and overview sections. Keep each section VERY brief.')
+          .replace('Include:', 'Include ONLY:')
+          .replace('1. Overview section', '1. Title (REQUIRED - single line, max 10 words)')
+          .replace('2. Prerequisites', '2. Overview (REQUIRED - exactly 2 sentences, no more)')
+          .replace('3. Step-by-step procedure', 'DO NOT include steps')
+          .replace('4. Safety warnings', 'DO NOT include safety warnings')
+          .replace('5. Completion checklist', 'DO NOT include prerequisites, safety warnings, or completion checklist');
+        
+        chunkSystemPrompt = promptConfig.system + `\n\nCRITICAL CONSTRAINTS:\n- Maximum 1 title (5 words max)\n- Maximum 1 overview (exactly 1 sentence, no more)\n- Keep response EXTREMELY brief\n- Return ONLY the JSON object with title and overview fields, no explanations, no other fields\n- Example: {"title": "Short Title", "overview": "One sentence only."}`;
+      } else if ((i === 1 || (i === 0 && mergedResult.title)) && (!mergedResult.prerequisites.tools || mergedResult.prerequisites.tools.length === 0)) {
+        // Second chunk or first chunk after title: Get prerequisites only
+        chunkPrompt = promptConfig.user
+          .replace('{context}', chunk)
+          .replace('Create concise step-by-step work instructions.', 'Create ONLY the prerequisites section. Keep lists very short.')
+          .replace('Include:', 'Include ONLY:')
+          .replace('1. Overview section', 'DO NOT include title or overview')
+          .replace('2. Prerequisites', '2. Prerequisites (REQUIRED - tools: 3 items max, materials: 3 items max, safety: 3 items max)')
+          .replace('3. Step-by-step procedure', 'DO NOT include steps')
+          .replace('4. Safety warnings', 'DO NOT include safety warnings')
+          .replace('5. Completion checklist', 'DO NOT include completion checklist');
+        
+        chunkSystemPrompt = promptConfig.system + `\n\nCRITICAL CONSTRAINTS:\n- Maximum 2 tools (each 2 words max)\n- Maximum 2 materials (each 2 words max)\n- Maximum 2 safety items (each 5 words max)\n- Keep EXTREMELY brief\n- Return ONLY the JSON object with prerequisites field, no explanations\n- Example: {"prerequisites": {"tools": ["Tool1", "Tool2"], "materials": ["Mat1", "Mat2"], "safety": ["Safety1", "Safety2"]}}`;
+      } else if (isLastChunk && mergedResult.steps.length === 0) {
+        // Last chunk but no steps yet: Generate steps
+        chunkPrompt = promptConfig.user
+          .replace('{context}', chunk)
+          .replace('Create concise step-by-step work instructions.', `Create ONLY ${maxStepsPerChunk} steps maximum for the procedure.`)
+          .replace('Include:', 'Include ONLY:')
+          .replace('1. Overview section', 'DO NOT include overview')
+          .replace('2. Prerequisites', 'DO NOT include prerequisites')
+          .replace('3. Step-by-step procedure', `3. Step-by-step procedure (REQUIRED - ${maxStepsPerChunk} steps max)`)
+          .replace('4. Safety warnings', 'DO NOT include safety warnings')
+          .replace('5. Completion checklist', 'DO NOT include completion checklist');
+        
+        chunkSystemPrompt = promptConfig.system + `\n\nCRITICAL CONSTRAINTS:\n- Maximum ${maxStepsPerChunk} steps in response\n- Each step should be EXTREMELY brief (title: 3 words max, description: 1 sentence max, notes: optional, 3 words max)\n- Keep steps EXTREMELY concise\n- Return ONLY the JSON object with steps array, no explanations\n- Example: {"steps": [{"stepNumber": 1, "title": "Short Title", "description": "One sentence.", "notes": "Brief"}]}`;
+      } else if (isLastChunk) {
+        // Last chunk: Try to get safety warnings and completion checklist
+        chunkPrompt = promptConfig.user
+          .replace('{context}', chunk)
+          .replace('Create concise step-by-step work instructions.', 'Create ONLY the safety warnings and completion checklist sections. Keep each brief.')
+          .replace('Include:', 'Include ONLY:')
+          .replace('1. Overview section', 'DO NOT include overview')
+          .replace('2. Prerequisites', 'DO NOT include prerequisites')
+          .replace('3. Step-by-step procedure', 'DO NOT include steps')
+          .replace('4. Safety warnings', '4. Safety warnings (REQUIRED - 3-5 items max)')
+          .replace('5. Completion checklist', '5. Completion checklist (REQUIRED - 3-5 items max)');
+        
+        chunkSystemPrompt = promptConfig.system + `\n\nCRITICAL CONSTRAINTS:\n- Maximum 2 safety warnings (each 5 words max)\n- Maximum 2 completion checklist items (each 3 words max)\n- Keep response EXTREMELY brief\n- Return ONLY the JSON object, no explanations\n- Example: {"safetyWarnings": ["Warning1", "Warning2"], "completionChecklist": ["Item1", "Item2"]}`;
+      } else {
+        // Middle chunks: Generate steps
+        chunkPrompt = promptConfig.user
+          .replace('{context}', chunk)
+          .replace('Create concise step-by-step work instructions.', `Create ONLY ${maxStepsPerChunk} steps maximum for part ${chunkIndex} of the procedure.`)
+          .replace('Include:', 'Include ONLY:')
+          .replace('1. Overview section', 'DO NOT include overview')
+          .replace('2. Prerequisites', 'DO NOT include prerequisites')
+          .replace('3. Step-by-step procedure', `3. Step-by-step procedure part ${chunkIndex} (REQUIRED - ${maxStepsPerChunk} steps max)`)
+          .replace('4. Safety warnings', 'DO NOT include safety warnings')
+          .replace('5. Completion checklist', 'DO NOT include completion checklist');
+        
+        chunkSystemPrompt = promptConfig.system + `\n\nCRITICAL CONSTRAINTS:\n- Maximum ${maxStepsPerChunk} steps in response\n- Each step should be EXTREMELY brief (title: 3 words max, description: 1 sentence max, notes: optional, 3 words max)\n- Number steps sequentially starting from ${mergedResult.steps.length + 1}\n- Keep steps EXTREMELY concise\n- Return ONLY the JSON object with steps array, no explanations\n- Example: {"steps": [{"stepNumber": 1, "title": "Short", "description": "One sentence.", "notes": "Brief"}]}`;
+      }
+
+      const chunkPromptConfig = {
+        system: chunkSystemPrompt,
+        user: chunkPrompt
+      };
+
+      // Generate this chunk with aggressive token limit
+      let chunkData;
+      if (llmProvider === 'bedrock') {
+        chunkData = await bedrockService.invokeAndParseJSON(
+          chunkPromptConfig.system,
+          chunkPromptConfig.user,
+          {
+            temperature: 0.3,
+            maxTokens: maxTokensPerChunk
+          }
+        );
+      } else {
+        // Explicitly pass maxTokens to ensure it's used
+        chunkData = await geminiService.invokeAndParseJSON(
+          chunkPromptConfig.system,
+          chunkPromptConfig.user,
+          {
+            temperature: 0.3,
+            maxTokens: maxTokensPerChunk // Use 4000 instead of 8192
+          }
+        );
+      }
+
+      // Merge chunk data into result
+      if (chunkData) {
+        // Merge title, overview, prerequisites (from first chunk)
+        if (chunkData.title && !mergedResult.title) {
+          mergedResult.title = chunkData.title;
+        }
+        if (chunkData.overview && !mergedResult.overview) {
+          mergedResult.overview = chunkData.overview;
+        }
+        if (chunkData.prerequisites) {
+          if (Array.isArray(chunkData.prerequisites)) {
+            mergedResult.prerequisites = { tools: [], materials: [], safety: chunkData.prerequisites };
+          } else {
+            mergedResult.prerequisites = {
+              tools: [...(mergedResult.prerequisites.tools || []), ...(chunkData.prerequisites.tools || [])],
+              materials: [...(mergedResult.prerequisites.materials || []), ...(chunkData.prerequisites.materials || [])],
+              safety: [...(mergedResult.prerequisites.safety || []), ...(chunkData.prerequisites.safety || [])]
+            };
+          }
+        }
+
+        // Merge steps (from middle/last chunks)
+        if (chunkData.steps && Array.isArray(chunkData.steps)) {
+          // Limit steps if somehow more were generated
+          const limitedSteps = chunkData.steps.slice(0, maxStepsPerChunk);
+          
+          // Renumber steps to be sequential
+          const startStepNumber = mergedResult.steps.length + 1;
+          const renumberedSteps = limitedSteps.map((step, idx) => ({
+            ...step,
+            stepNumber: startStepNumber + idx
+          }));
+          mergedResult.steps.push(...renumberedSteps);
+          logger.info(`Chunk ${chunkIndex}/${totalChunks} generated ${renumberedSteps.length} steps successfully`);
+        }
+
+        // Merge safety warnings and completion checklist (from last chunk)
+        if (chunkData.safetyWarnings && Array.isArray(chunkData.safetyWarnings)) {
+          mergedResult.safetyWarnings = [...mergedResult.safetyWarnings, ...chunkData.safetyWarnings];
+        }
+        if (chunkData.completionChecklist && Array.isArray(chunkData.completionChecklist)) {
+          mergedResult.completionChecklist = [...mergedResult.completionChecklist, ...chunkData.completionChecklist];
+        }
+      }
+    } catch (error) {
+      logger.error(`Chunk ${chunkIndex}/${totalChunks} failed`, {
+        error: error.message,
+        chunkSize: chunk.length,
+        stack: error.stack
+      });
+      // Re-throw with context about which chunk failed
+      throw new Error(`Failed to generate work instructions chunk ${chunkIndex} of ${totalChunks}: ${error.message}`);
+    }
+  }
+
+  // Ensure title if not set
+  if (!mergedResult.title) {
+    mergedResult.title = 'Work Instructions';
+  }
+
+  // Deduplicate prerequisites arrays
+  mergedResult.prerequisites.tools = [...new Set(mergedResult.prerequisites.tools)];
+  mergedResult.prerequisites.materials = [...new Set(mergedResult.prerequisites.materials)];
+  mergedResult.prerequisites.safety = [...new Set(mergedResult.prerequisites.safety)];
+  
+  // Deduplicate safety warnings and completion checklist
+  mergedResult.safetyWarnings = [...new Set(mergedResult.safetyWarnings)];
+  mergedResult.completionChecklist = [...new Set(mergedResult.completionChecklist)];
+
+  logger.info(`Chunked work instructions generation complete: ${mergedResult.steps.length} steps from ${totalChunks} chunks`);
+  return mergedResult;
+};
 
 /**
  * Generate AI content from documents
@@ -20,9 +368,10 @@ import { logger } from '../utils/logger.js';
  * @param {string} [params.queryText] - Optional query text for better relevance
  * @param {string} [params.llmProvider] - LLM provider ('bedrock' or 'gemini'), defaults to 'gemini'
  * @param {string} [params.promptId] - Specific prompt ID to use, defaults to active prompt
+ * @param {Function} [params.onProgress] - Optional progress callback function
  * @returns {Promise<Object>} Generated content and metadata
  */
-export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvider = 'gemini', promptId = null }) => {
+export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvider = 'gemini', promptId = null, onProgress = null }) => {
   // Force Gemini as Bedrock is not accessible
   // If bedrock is requested, fallback to Gemini
   if (llmProvider === 'bedrock') {
@@ -47,12 +396,17 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
 
   // Step 2: Query vector database for relevant chunks
   const useLangchain = process.env.USE_LANGCHAIN === 'true';
-  logger.info(`Querying ${useLangchain ? 'via Langchain' : 'ChromaDB'} for relevant chunks...`);
+  const vectorDb = process.env.VECTOR_DB || 'chromadb';
+  // Limit chunks to prevent context overflow - reduce context to allow more room for response
+  // Lower context = more tokens available for response generation
+  // Reduced context size to allow for smaller chunks and prevent token limit errors
+  const maxContextChars = parseInt(process.env.MAX_CONTEXT_CHARS) || 4000;
   const topK = 10; // Number of results to return
-  
+
   let relevantChunks;
   if (useLangchain) {
     // Use Langchain for similarity search
+    logger.info('Querying via Langchain for relevant chunks...');
     const langchainService = (await import('../services/langchainService.js')).default;
     const query = queryText || 'document content'; // Langchain needs a query string
     const results = await langchainService.similaritySearch(query, documentIds, topK);
@@ -62,8 +416,17 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
       metadata: result.metadata,
       score: result.score
     }));
+  } else if (vectorDb.toLowerCase() === 'pinecone') {
+    // Use native Pinecone service
+    logger.info('Querying Pinecone for relevant chunks...');
+    relevantChunks = await pineconeService.queryByDocumentIds(
+      documentIds,
+      queryEmbedding,
+      topK
+    );
   } else {
-    // Use native ChromaDB service (existing implementation)
+    // Use native ChromaDB service (default)
+    logger.info('Querying ChromaDB for relevant chunks...');
     const chromaQueryText = queryText || null;
     relevantChunks = await chromaService.queryByDocumentIds(
       documentIds,
@@ -78,32 +441,44 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
 
   logger.info(`Retrieved ${relevantChunks.length} relevant chunks`);
 
-  // Step 3: Build context from chunks
+  // Step 3: Build context from chunks with size limit
   logger.info('Building context from chunks...');
-  const context = relevantChunks
-    .map(chunk => {
-      // Langchain returns text directly, native service has it in metadata
-      const text = chunk.text || chunk.metadata?.text || '';
-      return text.trim();
-    })
-    .filter(text => text.length > 0)
-    .join('\n\n');
+  let context = '';
+  let chunksUsed = 0;
+
+  // Build context incrementally, stopping when we reach max size
+  for (const chunk of relevantChunks) {
+    const text = (chunk.text || chunk.metadata?.text || '').trim();
+    if (text.length === 0) continue;
+
+    const chunkWithSeparator = context ? `\n\n${text}` : text;
+    const potentialContext = context + chunkWithSeparator;
+
+    // If adding this chunk would exceed limit, stop here
+    if (potentialContext.length > maxContextChars) {
+      logger.info(`Context size limit reached (${maxContextChars} chars), using ${chunksUsed} chunks`);
+      break;
+    }
+
+    context = potentialContext;
+    chunksUsed++;
+  }
 
   if (context.length === 0) {
     throw new Error('No valid text content found in retrieved chunks');
   }
 
-  logger.info(`Context built: ${context.length} characters from ${relevantChunks.length} chunks`);
+  logger.info(`Context built: ${context.length} characters from ${chunksUsed} of ${relevantChunks.length} chunks`);
 
   // Step 4: Get prompt template based on use case from prompt library
   // Use promptId parameter to select specific prompt from library
   logger.info(`Getting prompt template for use case: ${useCase}${promptId ? `, promptId: ${promptId}` : ' (using active prompt)'}`);
   let promptConfig;
-  
+
   try {
     // Load from prompt library service (supports multiple prompts per use case)
     const selectedPrompt = await getPrompt(useCase, promptId);
-    
+
     if (selectedPrompt) {
       // Replace {context} placeholder with actual context
       const userPrompt = selectedPrompt.userTemplate.replace('{context}', context);
@@ -111,10 +486,10 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
         system: selectedPrompt.system,
         user: userPrompt
       };
-      logger.info('Using prompt from library', { 
-        useCase, 
-        promptId: selectedPrompt.id, 
-        promptName: selectedPrompt.name 
+      logger.info('Using prompt from library', {
+        useCase,
+        promptId: selectedPrompt.id,
+        promptName: selectedPrompt.name
       });
     } else {
       // Fallback to default prompts
@@ -140,29 +515,25 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
   }
 
   // Step 5: Invoke AI model and parse JSON response
-  logger.info(`Invoking ${llmProvider}...`);
+  // Use chunked generation (7+ requests) to avoid token limit errors
+  // More chunks = smaller responses per chunk = less likely to exceed token limit
+  logger.info(`Invoking ${llmProvider} with chunked generation...`);
   let parsedData;
-  
-  if (llmProvider === 'bedrock') {
-    // Use Bedrock/Claude
-    parsedData = await bedrockService.invokeAndParseJSON(
-      promptConfig.system,
-      promptConfig.user,
-      {
-        temperature: 0.3, // Lower temperature for structured output
-        maxTokens: 4096
-      }
-    );
+
+  // Split context into many small chunks (15+ chunks, ~300 chars each)
+  // More chunks = smaller responses = less chance of exceeding token limit
+  const contextSize = context.length;
+  const targetChunkSize = 300; // Very small chunks (~300 chars each)
+  const contextChunks = splitContextIntoChunks(context, targetChunkSize);
+  logger.info(`Using ${contextChunks.length} chunks for generation (context size: ${contextSize} chars, target: ~${targetChunkSize} chars per chunk)`);
+
+  // Use chunked generation for both checksheet and work instructions
+  if (useCase === 'checksheet') {
+    parsedData = await generateChecksheetChunked(contextChunks, promptConfig, llmProvider, onProgress);
+  } else if (useCase === 'workInstructions') {
+    parsedData = await generateWorkInstructionsChunked(contextChunks, promptConfig, llmProvider, onProgress);
   } else {
-    // Default to Gemini
-    parsedData = await geminiService.invokeAndParseJSON(
-      promptConfig.system,
-      promptConfig.user,
-      {
-        temperature: 0.3, // Lower temperature for structured output
-        maxTokens: 4096
-      }
-    );
+    throw new Error(`Invalid use case: ${useCase}`);
   }
 
   // Log detailed response info
@@ -184,14 +555,14 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
     });
 
     // Check if there's ANY content
-    const hasContent = 
+    const hasContent =
       parsedData.title ||
       parsedData.overview ||
       (parsedData.prerequisites && (
         Array.isArray(parsedData.prerequisites) ? parsedData.prerequisites.length > 0 :
-        (parsedData.prerequisites.tools?.length > 0 || 
-         parsedData.prerequisites.materials?.length > 0 || 
-         parsedData.prerequisites.safety?.length > 0)
+          (parsedData.prerequisites.tools?.length > 0 ||
+            parsedData.prerequisites.materials?.length > 0 ||
+            parsedData.prerequisites.safety?.length > 0)
       )) ||
       (parsedData.steps && parsedData.steps.length > 0) ||
       (parsedData.safetyWarnings && parsedData.safetyWarnings.length > 0) ||

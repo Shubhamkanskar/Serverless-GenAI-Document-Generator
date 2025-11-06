@@ -78,11 +78,11 @@ const uploadHandler = async (event, context) => {
       return createErrorResponse(400, validationError.message);
     }
 
-    // Validate file size (max 100MB for PDF)
+    // Validate file size (max 30MB for PDF to control processing costs)
     // Note: API Gateway REST API has a 10MB payload limit.
     // Files >10MB will automatically use presigned URL uploads (see frontend/src/services/api.js)
     try {
-      validateFileSize(file.size, 100);
+      validateFileSize(file.size, 30); // Reduced from 100MB to 30MB
     } catch (sizeError) {
       logger.warn('File size validation failed', { error: sizeError.message, size: file.size });
       return createErrorResponse(400, sizeError.message);

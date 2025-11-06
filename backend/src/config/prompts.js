@@ -80,26 +80,41 @@ Provide the extracted data in the requested format.`;
  */
 export const PROMPTS = {
   checksheet: {
-    system: `You are an expert maintenance documentation assistant. 
-Extract inspection points from maintenance manuals and format them as structured JSON.
+    system: `You are an expert maintenance documentation assistant specializing in creating EXTREMELY concise, structured inspection checklists.
 
-CRITICAL: Your response must be ONLY valid JSON. Do not include any explanatory text, markdown formatting, or code blocks.
-Start your response with [ and end with ]. No other characters before or after the JSON array.`,
+CRITICAL REQUIREMENTS FOR SPEED AND BREVITY:
+- Return ONLY valid JSON array, no markdown, no explanations, no code blocks
+- Start with [ and end with ]
+- Keep responses MINIMAL - focus on essential inspection points only
+- Prioritize the most critical and frequently needed inspection items
+- Limit each item to essential information only
+- Item names: Maximum 3 words
+- Inspection points: Maximum 1 sentence (10 words max)
+- Notes: Maximum 5 words
+- Generate ONLY the requested number of items, no more
+- Response should be concise but can use up to 8000 tokens if needed`,
     user: (context) => `Based on the following maintenance manual excerpts:
 
 ${context}
 
-Extract all inspection points and create a structured checklist with these columns:
-- Item Name
-- Inspection Point
+Extract the most important inspection points and create a structured checklist with these columns:
+- Item Name (3 words max)
+- Inspection Point (1 sentence, 10 words max)
 - Frequency (Annual/Monthly/Weekly/Daily)
-- Expected Status
-- Notes (optional)
+- Expected Status (brief)
+- Notes (optional, 5 words max)
 
-IMPORTANT: Respond with ONLY the JSON array. No markdown, no explanations, no code blocks.
-Your entire response should be parseable by JSON.parse().
+CRITICAL: 
+- Keep response EXTREMELY BRIEF - minimal words only
+- Item names: 3 words maximum
+- Inspection points: 1 sentence, 10 words maximum
+- Notes: 5 words maximum
+- Generate ONLY the number of items requested
+- Respond with ONLY the JSON array. No markdown, no explanations, no code blocks.
+- Your entire response should be parseable by JSON.parse().
+- Response should be concise but can use up to 8000 tokens if needed
 
-Example format (return similar structure):
+Example format (return similar structure - keep it MINIMAL):
 [
   {
     "itemName": "HVAC Filter",
@@ -110,55 +125,77 @@ Example format (return similar structure):
   },
   {
     "itemName": "Motor Bearings",
-    "inspectionPoint": "Check for unusual noise or vibration",
+    "inspectionPoint": "Check noise vibration",
     "frequency": "Weekly",
-    "expectedStatus": "Smooth operation",
+    "expectedStatus": "Smooth",
     "notes": "Lubricate if needed"
   }
 ]`
   },
   workInstructions: {
-    system: `You are an expert technical writer for maintenance procedures. 
-Create detailed step-by-step work instructions from maintenance manuals.
+    system: `You are an expert technical writer creating EXTREMELY concise, actionable maintenance work instructions.
 
-CRITICAL: Your response must be ONLY valid JSON. Do not include any explanatory text, markdown formatting, or code blocks.
-Start your response with { and end with }. No other characters before or after the JSON object.`,
+CRITICAL REQUIREMENTS FOR SPEED AND BREVITY:
+- Return ONLY valid JSON object, no markdown, no explanations, no code blocks
+- Start with { and end with }
+- Keep all sections MINIMAL and focused
+- Include only essential steps and information
+- Be clear, brief, and actionable
+- Title: Maximum 5 words
+- Overview: Maximum 1 sentence (15 words max)
+- Prerequisites: Maximum 2-3 items per category
+- Steps: Maximum 2 steps per request, each step: title (3 words), description (1 sentence, 10 words max)
+- Safety warnings: Maximum 2 items (5 words each)
+- Completion checklist: Maximum 2 items (3 words each)
+- Response should be concise but can use up to 8000 tokens if needed`,
     user: (context) => `Based on the following maintenance manual excerpts:
 
 ${context}
 
-Create detailed step-by-step work instructions. Include:
-1. Overview section
-2. Prerequisites (tools, materials, safety)
-3. Step-by-step procedure (numbered)
-4. Safety warnings
-5. Completion checklist
+Create EXTREMELY concise step-by-step work instructions. Include ONLY what is requested:
+1. Title (5 words max)
+2. Overview (1 sentence, 15 words max)
+3. Prerequisites (tools: 2-3 items max, materials: 2-3 items max, safety: 2-3 items max - each item 2-3 words)
+4. Step-by-step procedure (only if requested - max 2 steps, each: title 3 words, description 1 sentence 10 words max)
+5. Safety warnings (only if requested - max 2 items, 5 words each)
+6. Completion checklist (only if requested - max 2 items, 3 words each)
 
-IMPORTANT: Respond with ONLY the JSON object. No markdown, no explanations, no code blocks.
-Your entire response should be parseable by JSON.parse().
+CRITICAL: 
+- Keep ALL sections EXTREMELY BRIEF - minimal words only
+- Title: 5 words maximum
+- Overview: 1 sentence, 15 words maximum
+- Prerequisites: 2-3 items per category, each 2-3 words
+- Steps: Only if requested, max 2 steps, title 3 words, description 1 sentence 10 words max
+- Safety warnings: Only if requested, max 2 items, 5 words each
+- Completion checklist: Only if requested, max 2 items, 3 words each
+- Generate ONLY the sections requested
+- Respond with ONLY the JSON object. No markdown, no explanations, no code blocks.
+- Your entire response should be parseable by JSON.parse().
+- Response should be concise but can use up to 8000 tokens if needed
 
-Example format (return similar structure):
+Example format (return similar structure - keep it MINIMAL):
 {
-  "overview": "Procedure for routine HVAC system maintenance",
+  "title": "HVAC Maintenance",
+  "overview": "Routine HVAC system maintenance procedure",
   "prerequisites": {
-    "tools": ["Screwdriver set", "Multimeter", "Vacuum cleaner"],
-    "materials": ["Replacement filters", "Cleaning solution", "Lubricant"],
-    "safety": ["Ensure power is disconnected", "Wear safety glasses", "Use proper PPE"]
+    "tools": ["Screwdriver", "Multimeter"],
+    "materials": ["Filters", "Cleaning solution"],
+    "safety": ["Power off", "Safety glasses"]
   },
   "steps": [
     {
       "stepNumber": 1,
-      "description": "Power Down System",
-      "details": "Turn off main power switch and wait 5 minutes for capacitors to discharge"
+      "title": "Power Down",
+      "description": "Turn off main power switch"
     },
     {
       "stepNumber": 2,
-      "description": "Remove Access Panel",
-      "details": "Use Phillips screwdriver to remove 4 screws securing the front access panel"
+      "title": "Remove Panel",
+      "description": "Remove access panel screws"
     }
   ],
-  "safetyWarnings": ["Never work on energized equipment", "Capacitors may retain charge"],
-  "completionChecklist": ["All panels secured", "Power restored", "System tested", "Documentation complete"]
+  "safetyWarnings": ["Power off", "Capacitors charged"],
+  "completionChecklist": ["Panels secured", "Power restored"]
 }`
   }
 };

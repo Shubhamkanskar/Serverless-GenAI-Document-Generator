@@ -54,7 +54,7 @@ cd "Serverless GenAI Document Generator"
    # Google Gemini Configuration (Primary - Recommended)
    GOOGLE_API_KEY=your-google-api-key
    GEMINI_API_KEY=your-google-api-key  # Alternative to GOOGLE_API_KEY
-   GEMINI_MODEL=gemini-2.0-flash  # Optional, defaults to 'gemini-2.0-flash'
+   GEMINI_MODEL=gemini-2.5-flash  # Optional, defaults to 'gemini-2.5-flash'
    GEMINI_EMBEDDING_DIMENSION=1024  # Optional, defaults to '1024'
 
    # AWS Bedrock Configuration (Optional - for Claude support)
@@ -134,7 +134,7 @@ Follow the detailed setup guide in [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) for comp
 | **AI Provider (Choose One)**     |
 | `GOOGLE_API_KEY`                 | Google Gemini API key (recommended) | ✅ Yes\*                       | `your-google-api-key`                     |
 | `GEMINI_API_KEY`                 | Alternative to GOOGLE_API_KEY       | ⚠️ If not using GOOGLE_API_KEY | `your-google-api-key`                     |
-| `GEMINI_MODEL`                   | Gemini model name                   | ❌ Optional                    | `gemini-2.0-flash`                        |
+| `GEMINI_MODEL`                   | Gemini model name                   | ❌ Optional                    | `gemini-2.5-flash`                        |
 | `BEDROCK_MODEL_ID`               | Claude model ID for Bedrock         | ⚠️ If using Bedrock            | `anthropic.claude-3-sonnet-20240229-v1:0` |
 | **Vector Database (Choose One)** |
 | `CHROMA_API_KEY`                 | ChromaDB API key (recommended)      | ✅ Yes\*                       | `your-chromadb-api-key`                   |
@@ -180,67 +180,127 @@ This stores credentials in `~/.aws/credentials` and is automatically used by AWS
 
 ## 🏗️ Architecture
 
+### High-Level Architecture
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    React Frontend                       │
-│              (S3 Hosted Static Website)                 │
-│  - Document Upload UI                                   │
-│  - Use Case Selection (Checksheet/Work Instructions)    │
-│  - LLM Selector (Bedrock/Gemini)                        │
-│  - Document Generation & Download                       │
-└────────────────────┬────────────────────────────────────┘
-                     │
+┌─────────────────────────────────────────────────────────────────┐
+│                        React Frontend (S3)                      │
+│  • Document Upload  • Use Case Selection  • Polling Status     │
+└────────────────────┬────────────────────────────────────────────┘
+                     │ HTTPS
                      ▼
-┌─────────────────────────────────────────────────────────┐
-│                  AWS API Gateway                         │
-│              (REST API with CORS)                        │
-└────────────────────┬────────────────────────────────────┘
-                     │
-       ┌─────────────┼─────────────┐
-       │             │             │
-       ▼             ▼             ▼
-┌──────────┐  ┌──────────┐  ┌──────────┐
-│  Upload  │  │  Ingest  │  │ Generate │
-│  Lambda  │  │  Lambda  │  │  Lambda  │
-└──────────┘  └──────────┘  └──────────┘
-       │             │             │
-       ▼             ▼             ▼
-┌─────────────────────────────────────────────────────────┐
-│                    AWS S3 Buckets                        │
-│  - Documents Bucket (Uploaded PDFs)                      │
-│  - Outputs Bucket (Generated Excel/DOCX files)          │
-│  - Frontend Bucket (Static website hosting)             │
-└─────────────────────────────────────────────────────────┘
-                     │
-       ┌─────────────┼─────────────┐
-       │             │             │
-       ▼             ▼             ▼
-┌─────────────┐  ┌─────────────┐  ┌──────────────┐
-│   Gemini    │  │   Bedrock   │  │  ChromaDB /   │
-│  (Primary)  │  │  (Claude)   │  │  Pinecone     │
-│             │  │             │  │  (Vector DB)  │
-└─────────────┘  └─────────────┘  └──────────────┘
-                     │
-                     ▼
-          ┌──────────────────────┐
-          │   Langchain (Optional)│
-          │   Vector Operations   │
-          └──────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│               AWS API Gateway (29s timeout limit)               │
+│  • POST /upload          • POST /ingest   • POST /generate-doc  │
+│  • GET /ingest-status    • GET /generation-status               │
+└────────┬────────────────────┬────────────────────┬──────────────┘
+         │                    │                    │
+         ▼                    ▼                    ▼
+┌────────────────┐  ┌──────────────────┐  ┌─────────────────────┐
+│ Upload Lambda  │  │  Ingest Lambda   │  │  Generate Lambda    │
+│   (Sync 30s)   │  │   (Async 300s)   │  │   (Async 300s)      │
+└────────┬───────┘  └────────┬─────────┘  └──────────┬──────────┘
+         │                   │                         │
+         │      ┌────────────┴─────┐      ┌───────────┴──────────┐
+         │      │ Self-Invoke      │      │ Self-Invoke          │
+         │      │ (InvocationType  │      │ (InvocationType      │
+         │      │  = 'Event')      │      │  = 'Event')          │
+         │      └────────┬─────────┘      └──────────┬───────────┘
+         │               │                           │
+         ▼               ▼                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                          AWS S3 Buckets                          │
+│  • Documents (PDFs)  • Outputs (Excel/DOCX)  • Frontend (HTML)  │
+└──────────────┬──────────────────────────────────────────────────┘
+               │
+       ┌───────┴────────┬─────────────────┬───────────────┐
+       ▼                ▼                 ▼               ▼
+┌─────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────────┐
+│  DynamoDB   │  │ Pinecone/    │  │  Gemini  │  │   Bedrock    │
+│   Status    │  │  ChromaDB    │  │   AI     │  │   Claude     │
+│  Tracking   │  │  (Vectors)   │  │ (8000T)  │  │   (200K)     │
+└─────────────┘  └──────────────┘  └──────────┘  └──────────────┘
+```
+
+### Async Processing Flow (Solving 504 Timeout Issue)
+
+```
+User Action                    API Gateway              Lambda                    Frontend
+────────────────────────────────────────────────────────────────────────────────────────
+
+1. Click "Process"        ─────>  POST /ingest
+                                     (29s limit)
+                                         │
+2. Return immediately     <─────  202 Accepted         ─────> Store generationId
+   with generationId                { generationId,            Start polling
+                                      status: processing }
+                                         │
+                                         └─────> Async Invoke
+                                                 (300s timeout)
+                                                      │
+                                                      ├─> Extract PDF text
+                                                      ├─> Generate embeddings
+                                                      ├─> Store in Pinecone
+                                                      └─> Update DynamoDB status
+                                                          (progress: 0→100)
+3. Poll every 3-10s       ─────>  GET /ingest-status/:id
+   (exponential backoff)            │
+                                    └─────> Read DynamoDB
+4. Get progress updates   <─────  { status: processing,
+                                    progress: 45,
+                                    message: "Processing chunk 5/10" }
+
+5. Processing complete    <─────  { status: completed,
+   Stop polling                     progress: 100 }
 ```
 
 ### Key Components
 
-- **Frontend**: React app with Zustand state management, deployed to S3
-- **API Gateway**: RESTful API with CORS enabled, routes to Lambda functions
-- **Lambda Functions**:
-  - `upload` - Handles file uploads to S3
-  - `ingest` - Extracts text, generates embeddings, stores in vector DB
-  - `generate` - Queries vector DB and generates AI content
-  - `generateDocument` - Creates Excel/DOCX files from AI output
-  - `download` - Provides presigned URLs for generated files
-- **Vector Database**: ChromaDB (default) or Pinecone for semantic search
-- **AI Providers**: Google Gemini (default) or AWS Bedrock (Claude)
-- **Optional**: Langchain integration for vector operations
+**Frontend (React + Zustand):**
+
+- Async state management with polling
+- Exponential backoff (3s → 10s intervals)
+- Real-time progress updates
+- Error handling with retry
+
+**API Gateway:**
+
+- 29-second hard timeout limit
+- Returns 202 Accepted for async operations
+- Status endpoints for polling
+
+**Lambda Functions:**
+
+- `upload` (30s sync) - File upload to S3
+- `ingest` (300s async) - PDF processing, vectorization, 15+ chunks
+- `generateDocument` (300s async) - AI generation with 15+ requests
+- Status tracking with DynamoDB
+
+**AI Strategy (Solving Token Limits):**
+
+- Split context into 15+ small chunks (~300 chars each)
+- Make 15+ separate AI requests per generation
+- Max 8000 tokens per request (vs 8192 limit)
+- Aggressive prompt constraints (word limits)
+- Merge results with deduplication
+
+**Logging & Monitoring:**
+
+- CloudWatch Logs for all Lambda functions
+- Structured logging with context
+- Error tracking with stack traces
+- Performance metrics (duration, memory)
+
+**Vector Database:**
+
+- Pinecone (primary) or ChromaDB
+- Semantic search for relevant chunks
+- 1024-dimension embeddings (Gemini)
+
+**AI Providers:**
+
+- Google Gemini 2.0 Flash (primary)
+- AWS Bedrock Claude 3.5 Sonnet (alternative)
 
 ## 🛠️ Development
 
@@ -327,6 +387,98 @@ See [`backend/DEPLOYMENT.md`](./backend/DEPLOYMENT.md) and [`frontend/DEPLOYMENT
 
 ### Common Issues
 
+**504 Gateway Timeout Errors**
+
+**Problem:** API Gateway has a hard 29-second timeout limit. Long operations (document processing, AI generation) exceed this limit.
+
+**Solution Implemented:**
+
+1. **Async Processing Pattern**:
+
+   - API returns `202 Accepted` immediately with `generationId`
+   - Lambda invokes itself asynchronously (`InvocationType: 'Event'`)
+   - Frontend polls status endpoint every 3-10 seconds
+   - DynamoDB tracks progress (0-100%)
+
+2. **Implementation**:
+
+   ```javascript
+   // API returns immediately
+   return { statusCode: 202, body: { generationId, status: "processing" } };
+
+   // Lambda self-invokes asynchronously (no timeout)
+   await lambda.invoke({
+     InvocationType: "Event", // Async
+     FunctionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
+     Payload: JSON.stringify({ action: "process", ...data }),
+   });
+
+   // Frontend polls with exponential backoff
+   const pollStatus = async () => {
+     const status = await checkStatus(generationId);
+     if (status === "completed") return;
+     setTimeout(pollStatus, interval * 1.2); // Exponential backoff
+   };
+   ```
+
+**502 Bad Gateway Errors**
+
+**Cause:** Lambda function crashes, out of memory, or returns invalid response
+
+**Solution:**
+
+1. **Increased Memory**: 1024MB for processing functions
+2. **Error Handling**: Try-catch blocks in all async operations
+3. **Input Validation**: Validate all inputs before processing
+4. **Structured Logging**: CloudWatch logs for debugging
+5. **Retry Logic**: Exponential backoff with 3 retry attempts
+
+**Token Limit Errors (AI Responses Truncated)**
+
+**Problem:** Gemini's 8192 token output limit exceeded, responses truncated
+
+**Solution - Aggressive Chunking:**
+
+1. Split context into 15+ small chunks (~300 chars each)
+2. Make 15+ separate AI requests per document
+3. Use 8000 tokens per request (buffer from 8192 limit)
+4. Strict prompts with word limits:
+   - Item names: 3 words max
+   - Descriptions: 1 sentence, 10 words max
+   - Notes: 5 words max
+5. Merge results with deduplication
+
+**Logging & Debugging**
+
+**CloudWatch Logs Access:**
+
+```bash
+# View logs for specific function
+aws logs tail /aws/lambda/genai-doc-generator-dev-ingest --follow
+
+# Search for errors
+aws logs filter-pattern /aws/lambda/genai-doc-generator-dev-ingest "ERROR"
+```
+
+**Structured Logging Implementation:**
+
+```javascript
+// Every Lambda function logs with context
+logger.info("Processing document", {
+  fileId,
+  stage: "embedding_generation",
+  chunkCount: chunks.length,
+  duration: Date.now() - startTime,
+});
+
+logger.error("Generation failed", {
+  error: err.message,
+  stack: err.stack,
+  generationId,
+  chunk: chunkIndex,
+});
+```
+
 **CORS Errors**
 
 - Ensure API Gateway CORS is configured (already set in `serverless.yml`)
@@ -335,29 +487,15 @@ See [`backend/DEPLOYMENT.md`](./backend/DEPLOYMENT.md) and [`frontend/DEPLOYMENT
 
 **Vector Database Connection**
 
-- ChromaDB: Verify `CHROMA_API_KEY`, `CHROMA_TENANT`, and `CHROMA_DATABASE` are set
 - Pinecone: Verify `PINECONE_API_KEY`, `PINECONE_INDEX_NAME` are set
-- Check `VECTOR_DB` environment variable matches your choice
+- ChromaDB: Verify `CHROMA_API_KEY`, `CHROMA_TENANT` are set
+- Check CloudWatch logs for connection errors
 
 **AI Provider Issues**
 
-- Gemini: Verify `GOOGLE_API_KEY` or `GEMINI_API_KEY` is set and valid
-- Bedrock: Ensure IAM role has Bedrock access permissions
+- Gemini: Verify `GOOGLE_API_KEY` is valid and has quota
+- Bedrock: Ensure IAM role has `bedrock:InvokeModel` permission
 - Check CloudWatch logs for specific error messages
-
-**Deployment Errors**
-
-- Verify AWS credentials are configured: `aws configure`
-- Check IAM role has required permissions (see `docs/IAM_ROLE_SETUP.md`)
-- Ensure S3 buckets exist before deployment
-- Check Serverless Framework version compatibility
-
-**Frontend Not Showing Documents**
-
-- Check browser console for errors
-- Verify API Gateway URL is correct in `.env`
-- Check network tab for failed API requests
-- Ensure documents are properly processed (status should be 'processed')
 
 See [`backend/DEPLOYMENT.md`](./backend/DEPLOYMENT.md) for more detailed troubleshooting.
 
@@ -547,9 +685,126 @@ The application is **deployed and operational** at:
 
 ---
 
+## 📖 Key Learnings & Technical Insights
+
+### 1. **API Gateway Timeout Constraints**
+
+- **Learning**: API Gateway has a hard 29-second timeout that cannot be increased
+- **Impact**: Any long-running operation (AI generation, document processing) will timeout
+- **Solution**: Implement async processing with polling pattern
+- **Implementation**:
+  - Return `202 Accepted` immediately
+  - Lambda self-invokes asynchronously (no timeout limit)
+  - DynamoDB for status tracking
+  - Frontend polls with exponential backoff (3s → 10s)
+
+### 2. **AI Token Limits & Context Management**
+
+- **Learning**: LLMs have strict output token limits (Gemini: 8192, Claude: 200K)
+- **Impact**: Large responses get truncated mid-generation
+- **Solution**: Aggressive chunking strategy
+- **Implementation**:
+  - Split context into 15+ tiny chunks (~300 chars)
+  - Make 15+ separate AI requests
+  - Use 8000 tokens per request (safety buffer)
+  - Strict prompts with word limits (3-10 words max)
+  - Merge and deduplicate results
+
+### 3. **Serverless Architecture Patterns**
+
+- **Learning**: Lambdas can invoke themselves asynchronously
+- **Benefit**: Bypass API Gateway timeout while maintaining serverless benefits
+- **Pattern**: "Fire and forget" with status tracking
+- **Tools**: DynamoDB for state, CloudWatch for logs
+
+### 4. **Frontend State Management**
+
+- **Learning**: Zustand provides clean state management without Redux complexity
+- **Implementation**:
+  - 3 stores: documents, generation, app state
+  - Async actions with loading states
+  - Polling with cleanup on unmount
+  - Error boundaries for resilience
+
+### 5. **Vector Database Integration**
+
+- **Learning**: Pinecone provides better performance than self-hosted ChromaDB
+- **Implementation**:
+  - 1024-dimension embeddings (Gemini)
+  - Semantic search for relevant chunks
+  - Upsert batching for performance
+  - Namespaces for multi-tenancy
+
+### 6. **Error Handling & Resilience**
+
+- **Learning**: Network failures and AI errors are common in production
+- **Implementation**:
+  - Retry logic with exponential backoff
+  - Try-catch at every async boundary
+  - Structured error logging
+  - User-friendly error messages
+  - Fallback to defaults when possible
+
+### 7. **Prompt Engineering**
+
+- **Learning**: Prompt quality directly impacts output quality and token usage
+- **Implementation**:
+  - 23 different prompt variations
+  - Explicit constraints (word limits, JSON format)
+  - Context size optimization
+  - Examples in prompts
+  - Prompt versioning and A/B testing capability
+
+### 8. **CloudWatch Logging Strategy**
+
+- **Learning**: Structured logs are essential for debugging serverless apps
+- **Implementation**:
+  - JSON-formatted logs with context
+  - Log levels (info, warn, error)
+  - Request/response logging
+  - Performance metrics (duration, memory)
+  - Error stack traces
+
+### 9. **S3 as a Database**
+
+- **Learning**: S3 can serve as a simple key-value store for config/state
+- **Use Case**: Prompt library storage (prompt-library.json)
+- **Benefits**: No additional database, versioning built-in, cheap storage
+- **Limitation**: Not suitable for high-frequency updates
+
+### 10. **Real-Time Progress Tracking**
+
+- **Learning**: Users need feedback during long operations
+- **Implementation**:
+  - Progress percentage (0-100%)
+  - Current step messages
+  - Estimated time remaining
+  - Chunk counts (5/15 processed)
+  - Visual progress bars
+
+---
+
+## 🎓 Technologies Learned & Applied
+
+| Technology                  | Purpose              | Key Learning                                           |
+| --------------------------- | -------------------- | ------------------------------------------------------ |
+| **Serverless Framework V4** | IaC deployment       | Simplifies Lambda + API Gateway deployment             |
+| **AWS Lambda Async Invoke** | Bypass timeouts      | Self-invocation pattern for long operations            |
+| **DynamoDB**                | Status tracking      | NoSQL for real-time status updates                     |
+| **Pinecone**                | Vector database      | Production-grade semantic search                       |
+| **Google Gemini**           | AI generation        | Fast, cost-effective, good structured output           |
+| **ExcelJS**                 | Excel generation     | Programmatic workbook creation with styles             |
+| **Zustand**                 | State management     | Simple, performant alternative to Redux                |
+| **Exponential Backoff**     | Polling pattern      | Efficient status checking without overwhelming backend |
+| **CloudWatch**              | Logging & monitoring | Essential for debugging serverless apps                |
+
+---
+
 **Built with ❤️ for Industrility**
 
 **Status**: ✅ Production Ready - All features implemented and deployed
+
+**Live Demo**: http://genai-frontend-shubham.s3-website-us-east-1.amazonaws.com/
 endpoints:
 POST - https://592puogegj.execute-api.us-east-1.amazonaws.com/dev/api/upload
 POST - https://592puogegj.execute-api.us-east-1.amazonaws.com/dev/api/ingest

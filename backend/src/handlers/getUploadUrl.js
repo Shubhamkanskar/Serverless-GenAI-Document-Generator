@@ -54,8 +54,8 @@ const getUploadUrlHandler = async (event, context) => {
       return createErrorResponse(400, 'Valid fileSize is required');
     }
 
-    // Validate file size (max 100MB for PDF)
-    const maxSize = 100 * 1024 * 1024; // 100MB
+    // Validate file size (max 30MB for PDF to control processing costs and server load)
+    const maxSize = 30 * 1024 * 1024; // 30MB
     if (fileSize > maxSize) {
       return createErrorResponse(400, `File size exceeds maximum allowed size of ${maxSize / (1024 * 1024)}MB`);
     }

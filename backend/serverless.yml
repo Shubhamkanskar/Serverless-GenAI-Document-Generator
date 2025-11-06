@@ -11,24 +11,54 @@ provider:
   stage: ${opt:stage, 'dev'}
   iam:
     role: arn:aws:iam::836347236536:role/GenAIDocGeneratorLambdaRole
-    # Note: The IAM role must have lambda:InvokeFunction permission for the ingest function
-    # to allow async processing. Add this policy to the role:
+    # Note: The IAM role must have the following permissions:
+    # 1. lambda:InvokeFunction for async processing (ingest and generate functions)
+    # 2. DynamoDB permissions for status tracking tables
+    # Add these policies to the role:
     # {
     #   "Effect": "Allow",
     #   "Action": "lambda:InvokeFunction",
-    #   "Resource": "arn:aws:lambda:*:*:function:genai-doc-generator-*-ingest"
+    #   "Resource": [
+    #     "arn:aws:lambda:*:*:function:genai-doc-generator-*-ingest",
+    #     "arn:aws:lambda:*:*:function:genai-doc-generator-*-generateDocument"
+    #   ]
+    # }
+    # {
+    #   "Effect": "Allow",
+    #   "Action": [
+    #     "dynamodb:PutItem",
+    #     "dynamodb:GetItem",
+    #     "dynamodb:UpdateItem",
+    #     "dynamodb:Query"
+    #   ],
+    #   "Resource": [
+    #     "arn:aws:dynamodb:*:*:table/genai-doc-generator-*-ingestion-status",
+    #     "arn:aws:dynamodb:*:*:table/genai-doc-generator-*-generation-status"
+    #   ]
     # }
   environment:
     # AWS_REGION is automatically set by Lambda - don't set it manually
-    # ChromaDB Configuration
-    CHROMA_API_KEY: ${env:CHROMA_API_KEY, ''}
-    CHROMA_TENANT: ${env:CHROMA_TENANT, ''}
-    CHROMA_DATABASE: ${env:CHROMA_DATABASE, 'genaidoc'}
+
+    # ChromaDB Configuration (DISABLED - Using Pinecone instead)
+    # CHROMA_API_KEY: ${env:CHROMA_API_KEY, ''}
+    # CHROMA_TENANT: ${env:CHROMA_TENANT, ''}
+    # CHROMA_DATABASE: ${env:CHROMA_DATABASE, 'genaidoc'}
+
+    # Pinecone Configuration (ACTIVE)
+    PINECONE_API_KEY: ${env:PINECONE_API_KEY, ''}
+    PINECONE_INDEX_NAME: ${env:PINECONE_INDEX_NAME, 'genaidoc'}
+    PINECONE_ENVIRONMENT: ${env:PINECONE_ENVIRONMENT, 'us-east-1-aws'}
+
     # Google Gemini Configuration
     GOOGLE_API_KEY: ${env:GOOGLE_API_KEY, ''}
     GEMINI_API_KEY: ${env:GEMINI_API_KEY, ''}
-    GEMINI_MODEL: ${env:GEMINI_MODEL, 'gemini-2.0-flash'}
+    GEMINI_MODEL: ${env:GEMINI_MODEL, 'gemini-2.5-flash'}
+    GEMINI_MAX_TOKENS: ${env:GEMINI_MAX_TOKENS, '8192'} # Max output tokens (default 8192 = maximum, prevents truncation)
+    GEMINI_RESPONSE_MAX_TOKENS: ${env:GEMINI_RESPONSE_MAX_TOKENS, '8192'} # Response token limit (8192 = maximum, complete responses)
+    MAX_CONTEXT_CHARS: ${env:MAX_CONTEXT_CHARS, '2500'} # Max context size (reduced to prevent token limit errors)
+    GEMINI_RATE_LIMIT_RPM: ${env:GEMINI_RATE_LIMIT_RPM, '50'} # Requests per minute (10 for free tier, 50+ for paid tiers)
     GEMINI_EMBEDDING_DIMENSION: ${env:GEMINI_EMBEDDING_DIMENSION, '1024'}
+
     # S3 Bucket Configuration
     # Set DOCUMENTS_BUCKET or S3_DOCUMENTS_BUCKET (both will work)
     # Serverless V4 doesn't support nested env var resolution, so set both
@@ -38,10 +68,17 @@ provider:
     OUTPUTS_BUCKET: ${env:OUTPUTS_BUCKET, 'genai-outputs-shubham'}
     S3_FRONTEND_BUCKET: ${env:S3_FRONTEND_BUCKET, 'genai-frontend-shubham'}
     FRONTEND_BUCKET: ${env:FRONTEND_BUCKET, 'genai-frontend-shubham'}
-    # Vector Database Selection (defaults to chromadb)
-    VECTOR_DB: ${env:VECTOR_DB, 'chromadb'}
+
+    # DynamoDB Configuration
+    INGESTION_STATUS_TABLE: ${self:service}-${self:provider.stage}-ingestion-status
+    GENERATION_STATUS_TABLE: ${self:service}-${self:provider.stage}-generation-status
+
+    # Vector Database Selection (using Pinecone)
+    VECTOR_DB: ${env:VECTOR_DB, 'pinecone'}
+
     # Langchain Integration (optional, set to 'true' to use Langchain for vector operations)
     USE_LANGCHAIN: ${env:USE_LANGCHAIN, 'false'}
+
     # Node Environment
     NODE_ENV: ${env:NODE_ENV, 'production'}
   apiGateway:
@@ -169,6 +206,25 @@ functions:
               - X-Api-Key
               - X-Amz-Security-Token
             allowCredentials: false
+
+  generationStatus:
+    handler: src/handlers/generationStatus.handler
+    timeout: 30
+    memorySize: 256
+    events:
+      - http:
+          path: api/generation-status/{generationId}
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
+
   download:
     handler: src/handlers/download.handler
     timeout: 30
@@ -442,6 +498,11 @@ build:
       - "https"
       - "url"
       - "zlib"
+      - "@aws-sdk/client-dynamodb"
+      - "@aws-sdk/lib-dynamodb"
+      - "@aws-sdk/client-s3"
+      - "@aws-sdk/client-lambda"
+      - "@aws-sdk/s3-request-presigner"
     exclude:
       - "@aws-sdk/*"
       - "aws-sdk"
@@ -452,3 +513,68 @@ custom:
   serverless-offline:
     httpPort: 3000
     host: localhost
+
+resources:
+  Resources:
+    # DynamoDB Table for Ingestion Status Tracking
+    IngestionStatusTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-ingestion-status
+        BillingMode: PAY_PER_REQUEST # On-demand pricing - no need to provision capacity
+        AttributeDefinitions:
+          - AttributeName: fileId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: fileId
+            KeyType: HASH
+        TimeToLiveSpecification:
+          Enabled: true
+          AttributeName: ttl # Auto-delete records after 30 days
+        Tags:
+          - Key: Service
+            Value: ${self:service}
+          - Key: Stage
+            Value: ${self:provider.stage}
+          - Key: Purpose
+            Value: ingestion-status-tracking
+        PointInTimeRecoverySpecification:
+          PointInTimeRecoveryEnabled: false # Can enable for production
+
+    # DynamoDB Table for Generation Status Tracking
+    GenerationStatusTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-generation-status
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: generationId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: generationId
+            KeyType: HASH
+        TimeToLiveSpecification:
+          Enabled: true
+          AttributeName: ttl
+        Tags:
+          - Key: Service
+            Value: ${self:service}
+          - Key: Stage
+            Value: ${self:provider.stage}
+          - Key: Purpose
+            Value: generation-status-tracking
+        PointInTimeRecoverySpecification:
+          PointInTimeRecoveryEnabled: false
+
+  Outputs:
+    IngestionStatusTableName:
+      Description: DynamoDB table name for ingestion status tracking
+      Value: !Ref IngestionStatusTable
+      Export:
+        Name: ${self:service}-${self:provider.stage}-ingestion-status-table
+
+    GenerationStatusTableName:
+      Description: DynamoDB table name for generation status tracking
+      Value: !Ref GenerationStatusTable
+      Export:
+        Name: ${self:service}-${self:provider.stage}-generation-status-table
