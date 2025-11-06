@@ -7,11 +7,10 @@ A serverless React application that uses GenAI to transform maintenance manuals 
 - **Inspection Checksheet Generator**: Extract inspection points from PDFs and generate Excel files
 - **Work Instructions Generator**: Extract procedures from PDFs and generate Word documents
 - **Serverless Architecture**: Built on AWS Lambda, API Gateway, and S3
-- **Multi-LLM Support**: Choose between AWS Bedrock (Claude) or Google Gemini for AI generation
-- **Vector Search**: ChromaDB (primary) or Pinecone integration for semantic document search
+
+- **Vector Search**: Pinecone integration for semantic document search
 - **Langchain Integration**: Optional Langchain support for vector operations (configurable)
 - **Real-time Processing**: Upload, process, and generate documents in real-time
-- **Modern UI**: Beautiful React interface with dark mode support
 
 ## 📋 Prerequisites
 
@@ -19,8 +18,8 @@ A serverless React application that uses GenAI to transform maintenance manuals 
 - npm (comes with Node.js)
 - AWS Account with CLI configured
 - Serverless Framework installed globally (V4 or V3)
-- **Vector Database**: ChromaDB account (recommended) OR Pinecone account with API key
-- **AI Provider**: Google Gemini API key (recommended) OR AWS Bedrock access with Claude models
+- **Vector Database**: Pinecone account with API key
+- **AI Provider**: Google Gemini API key (recommended)
 
 ## 🚀 Quick Start
 
@@ -57,24 +56,18 @@ cd "Serverless GenAI Document Generator"
    GEMINI_MODEL=gemini-2.5-flash  # Optional, defaults to 'gemini-2.5-flash'
    GEMINI_EMBEDDING_DIMENSION=1024  # Optional, defaults to '1024'
 
-   # AWS Bedrock Configuration (Optional - for Claude support)
-   BEDROCK_MODEL_ID=anthropic.claude-3-sonnet-20240229-v1:0
 
-   # ChromaDB Configuration (Primary - Recommended)
-   CHROMA_API_KEY=your-chromadb-api-key
-   CHROMA_TENANT=your-chromadb-tenant
-   CHROMA_DATABASE=genaidoc  # Optional, defaults to 'genaidoc'
+
+
 
    # Pinecone Configuration (Optional - Alternative to ChromaDB)
    PINECONE_API_KEY=your-pinecone-api-key
    PINECONE_INDEX_NAME=genai-documents
    PINECONE_ENVIRONMENT=us-east-1-aws
 
-   # Vector Database Selection
-   VECTOR_DB=chromadb  # Options: 'chromadb' or 'pinecone', defaults to 'chromadb'
 
-   # Langchain Integration (Optional)
-   USE_LANGCHAIN=false  # Set to 'true' to use Langchain for vector operations
+
+
 
    # S3 Bucket Configuration (replace [yourname] with your identifier)
    S3_FRONTEND_BUCKET=genai-frontend-[yourname]
