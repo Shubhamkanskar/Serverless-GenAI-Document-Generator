@@ -26,7 +26,7 @@ class EmbeddingService {
     // Can be set to 768, 1024, 1536, or 3072 (Gemini supports truncation via MRL)
     this.dimension = parseInt(process.env.GEMINI_EMBEDDING_DIMENSION) || 1024;
     this.maxRetries = 3;
-    this.defaultBatchSize = 50; // Reduced from 100 to avoid rate limits and network issues
+    this.defaultBatchSize = 100; // Optimized for throughput - batching handles large documents efficiently
 
     // Task type for RAG: RETRIEVAL_DOCUMENT for documents, RETRIEVAL_QUERY for queries
     this.taskType = 'RETRIEVAL_DOCUMENT'; // Default for document embeddings
@@ -204,12 +204,12 @@ class EmbeddingService {
         throw new Error('No valid texts to process');
       }
 
-      // Adaptive batch size: smaller for very large documents
+      // Adaptive batch size: larger for very large documents to improve throughput
       let batch = batchSize || this.defaultBatchSize;
-      if (validTexts.length > 1000) {
-        // For very large documents, use smaller batches to reduce API load
-        batch = Math.min(batch, 25);
-        logger.info('Large document detected, using smaller batch size', {
+      if (validTexts.length > 200) {
+        // For large documents, use larger batches and higher concurrency for better throughput
+        batch = Math.max(batch, 100); // Increase batch size for large docs
+        logger.info('Large document detected, using optimized batch size', {
           totalTexts: validTexts.length,
           adjustedBatchSize: batch
         });
@@ -230,8 +230,9 @@ class EmbeddingService {
         const batchTexts = validTexts.slice(i, i + batch);
         const batchIndex = Math.floor(i / batch) + 1;
         
-        // Process chunks in parallel with controlled concurrency
-        const concurrencyLimit = 5; // Process 5 embeddings concurrently
+        // Process chunks in parallel with adaptive concurrency
+        // Higher concurrency for large documents to improve throughput
+        const concurrencyLimit = validTexts.length > 200 ? 20 : 10; // Increase concurrency for large docs
         const batchEmbeddings = [];
 
         for (let j = 0; j < batchTexts.length; j += concurrencyLimit) {
@@ -296,10 +297,8 @@ class EmbeddingService {
           });
         }
 
-        // Minimal delay between batches (only if rate limited)
-        if (i + batch < validTexts.length && batchIndex % 20 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 50)); // Small delay every 20 batches
-        }
+        // No delay between batches for large documents - maximize throughput
+        // Only add minimal delay if we detect rate limiting
       }
 
       logger.info('Batch embedding generation completed', {

@@ -234,6 +234,49 @@ class DOCXService {
               );
             }
 
+            // Add source reference if available - prioritize explicit page numbers
+            if (step.source || step.sourceFile || step.sourcePage || step.pageNumber) {
+              let sourceText;
+
+              // Build source text with explicit page number handling
+              if (step.source && (step.source.includes('Page') || step.source.includes('page'))) {
+                // Source already includes page reference
+                sourceText = step.source;
+              } else if (step.sourcePage || step.pageNumber) {
+                // Build source with explicit page number
+                const page = step.sourcePage || step.pageNumber;
+                const file = step.sourceFile || step.fileName || step.source || 'Document';
+                sourceText = `${file}, Page ${page}`;
+              } else if (step.source) {
+                sourceText = step.source;
+              } else if (step.sourceFile) {
+                sourceText = step.sourceFile;
+              } else {
+                sourceText = 'Source document';
+              }
+
+              children.push(
+                new Paragraph({
+                  children: [
+                    new TextRun({
+                      text: '📄 Source: ',
+                      italics: true,
+                      size: 16,
+                      color: '666666'
+                    }),
+                    new TextRun({
+                      text: sourceText,
+                      italics: true,
+                      size: 16,
+                      color: '4472C4'
+                    })
+                  ],
+                  indent: { left: 720 },
+                  spacing: { after: 80 }
+                })
+              );
+            }
+
             // Add checkbox for completion
             children.push(
               new Paragraph({
@@ -265,7 +308,8 @@ class DOCXService {
         );
         
         data.safetyWarnings.forEach((warning, index) => {
-          if (warning && typeof warning === 'string' && warning.trim()) {
+          const warningText = typeof warning === 'string' ? warning : (warning.text || warning);
+          if (warningText && warningText.trim()) {
             children.push(
               new Paragraph({
                 children: [
@@ -282,13 +326,13 @@ class DOCXService {
                     color: 'D32F2F'
                   }),
                   new TextRun({
-                    text: warning.trim(),
+                    text: warningText.trim(),
                     bold: true,
                     size: 22,
                     color: '000000'
                   })
                 ],
-                spacing: { after: 150, before: 100 },
+                spacing: { after: 100, before: 100 },
                 indent: { left: 360 },
                 shading: {
                   fill: 'FFE5E5',
@@ -301,6 +345,47 @@ class DOCXService {
                 }
               })
             );
+            
+            // Add source reference if available - prioritize explicit page numbers
+            if (warning.source || warning.sourceFile || warning.sourcePage || warning.pageNumber) {
+              let sourceText;
+
+              // Build source text with explicit page number handling
+              if (warning.source && (warning.source.includes('Page') || warning.source.includes('page'))) {
+                sourceText = warning.source;
+              } else if (warning.sourcePage || warning.pageNumber) {
+                const page = warning.sourcePage || warning.pageNumber;
+                const file = warning.sourceFile || warning.fileName || warning.source || 'Document';
+                sourceText = `${file}, Page ${page}`;
+              } else if (warning.source) {
+                sourceText = warning.source;
+              } else if (warning.sourceFile) {
+                sourceText = warning.sourceFile;
+              } else {
+                sourceText = 'Source document';
+              }
+
+              children.push(
+                new Paragraph({
+                  children: [
+                    new TextRun({
+                      text: '📄 Source: ',
+                      italics: true,
+                      size: 16,
+                      color: '666666'
+                    }),
+                    new TextRun({
+                      text: sourceText,
+                      italics: true,
+                      size: 16,
+                      color: '4472C4'
+                    })
+                  ],
+                  indent: { left: 360 },
+                  spacing: { after: 50 }
+                })
+              );
+            }
           }
         });
 
@@ -328,7 +413,8 @@ class DOCXService {
         );
 
         data.completionChecklist.forEach((item, index) => {
-          if (item && typeof item === 'string' && item.trim()) {
+          const itemText = typeof item === 'string' ? item : (item.text || item);
+          if (itemText && itemText.trim()) {
             children.push(
               new Paragraph({
                 children: [
@@ -339,11 +425,11 @@ class DOCXService {
                     color: '4CAF50'
                   }),
                   new TextRun({
-                    text: item.trim(),
+                    text: itemText.trim(),
                     size: 22
                   })
                 ],
-                spacing: { after: 120 },
+                spacing: { after: 80 },
                 indent: { left: 360 },
                 shading: {
                   fill: index % 2 === 0 ? 'F5F5F5' : 'FFFFFF',
@@ -351,6 +437,47 @@ class DOCXService {
                 }
               })
             );
+            
+            // Add source reference if available - prioritize explicit page numbers
+            if (item.source || item.sourceFile || item.sourcePage || item.pageNumber) {
+              let sourceText;
+
+              // Build source text with explicit page number handling
+              if (item.source && (item.source.includes('Page') || item.source.includes('page'))) {
+                sourceText = item.source;
+              } else if (item.sourcePage || item.pageNumber) {
+                const page = item.sourcePage || item.pageNumber;
+                const file = item.sourceFile || item.fileName || item.source || 'Document';
+                sourceText = `${file}, Page ${page}`;
+              } else if (item.source) {
+                sourceText = item.source;
+              } else if (item.sourceFile) {
+                sourceText = item.sourceFile;
+              } else {
+                sourceText = 'Source document';
+              }
+
+              children.push(
+                new Paragraph({
+                  children: [
+                    new TextRun({
+                      text: '📄 Source: ',
+                      italics: true,
+                      size: 16,
+                      color: '666666'
+                    }),
+                    new TextRun({
+                      text: sourceText,
+                      italics: true,
+                      size: 16,
+                      color: '4472C4'
+                    })
+                  ],
+                  indent: { left: 360 },
+                  spacing: { after: 40 }
+                })
+              );
+            }
           }
         });
       }
@@ -631,6 +758,37 @@ class DOCXService {
         } else if (typeof data.content === 'string') {
           children.push(new Paragraph({ text: data.content }));
         }
+      }
+
+      // Add source citations section if metadata includes sources
+      if (data.metadata && data.metadata.sources && data.metadata.sources.length > 0) {
+        // Add page break
+        children.push(new Paragraph({ 
+          pageBreakBefore: true 
+        }));
+        
+        // Citations header
+        children.push(new Paragraph({
+          text: '📚 SOURCE DOCUMENT REFERENCES',
+          heading: HeadingLevel.HEADING_1,
+          spacing: { before: 400, after: 200 }
+        }));
+        
+        children.push(new Paragraph({
+          text: 'All work instructions are extracted from the following source documents:',
+          spacing: { after: 200 }
+        }));
+        
+        // Add each source
+        data.metadata.sources.forEach((source, index) => {
+          children.push(new Paragraph({
+            text: `${index + 1}. ${source}`,
+            spacing: { before: 100, after: 100 },
+            bullet: { level: 0 }
+          }));
+        });
+        
+        logger.info('Added source citations section', { sourceCount: data.metadata.sources.length });
       }
 
       const doc = new Document({

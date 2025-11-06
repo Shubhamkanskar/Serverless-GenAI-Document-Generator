@@ -85,6 +85,61 @@ class ExcelService {
         this.createFrequencyWorksheet(workbook, 'All Items', items, 'FF4472C4');
       }
 
+      // Add source citation sheet if metadata includes sources
+      if (data.metadata && data.metadata.sources && data.metadata.sources.length > 0) {
+        const citationSheet = workbook.addWorksheet('Source Citations', {
+          properties: { tabColor: { argb: 'FF95B3D7' } } // Light blue
+        });
+        
+        // Title
+        citationSheet.mergeCells('A1:B1');
+        const citationTitle = citationSheet.getCell('A1');
+        citationTitle.value = '📚 SOURCE DOCUMENT REFERENCES';
+        citationTitle.font = { name: 'Calibri', bold: true, size: 16, color: { argb: 'FF1F4E78' } };
+        citationTitle.alignment = { horizontal: 'center', vertical: 'middle' };
+        citationSheet.getRow(1).height = 30;
+        
+        // Description
+        citationSheet.mergeCells('A2:B2');
+        const citationDesc = citationSheet.getCell('A2');
+        citationDesc.value = 'All checksheet items are extracted from the following source documents:';
+        citationDesc.font = { italic: true, size: 11 };
+        citationSheet.getRow(2).height = 20;
+        
+        // Add blank row
+        citationSheet.addRow([]);
+        
+        // Headers
+        const headerRow = citationSheet.addRow(['#', 'Source Reference']);
+        headerRow.font = { bold: true, size: 11 };
+        headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+        
+        // Add sources
+        data.metadata.sources.forEach((source, index) => {
+          const row = citationSheet.addRow([index + 1, source]);
+          row.alignment = { vertical: 'top', wrapText: true };
+        });
+        
+        // Format columns
+        citationSheet.getColumn(1).width = 5;
+        citationSheet.getColumn(2).width = 80;
+        
+        // Add border to citation rows
+        for (let i = 4; i <= 4 + data.metadata.sources.length; i++) {
+          const row = citationSheet.getRow(i);
+          row.eachCell({ includeEmpty: true }, (cell) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+          });
+        }
+        
+        logger.info('Added source citations sheet', { sourceCount: data.metadata.sources.length });
+      }
+
       logger.info('Excel checksheet with frequency tabs generated', {
         fileName,
         totalItems: items.length,
@@ -120,8 +175,8 @@ class ExcelService {
       properties: { tabColor: { argb: tabColor } }
     });
 
-      // Add title row
-      worksheet.mergeCells('A1:G1');
+      // Add title row (now H1 for 8 columns)
+      worksheet.mergeCells('A1:H1');
       const titleCell = worksheet.getCell('A1');
       titleCell.value = '🔧 MAINTENANCE INSPECTION CHECKSHEET 🔧';
       titleCell.font = {
@@ -141,10 +196,10 @@ class ExcelService {
       };
       worksheet.getRow(1).height = 35;
 
-      // Add metadata row
-      worksheet.mergeCells('A2:G2');
+      // Add metadata row with sheet name (now H2 for 8 columns)
+      worksheet.mergeCells('A2:H2');
       const metaCell = worksheet.getCell('A2');
-      metaCell.value = `Generated: ${new Date().toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' })}`;
+      metaCell.value = `${sheetName} Frequency | Generated: ${new Date().toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' })}`;
       metaCell.font = { italic: true, size: 10, color: { argb: 'FF666666' } };
       metaCell.alignment = { horizontal: 'center' };
       worksheet.getRow(2).height = 18;
@@ -160,6 +215,7 @@ class ExcelService {
         { header: 'Frequency', key: 'frequency', width: 15 },
         { header: 'Expected Status', key: 'expectedStatus', width: 22 },
         { header: 'Notes', key: 'notes', width: 30 },
+        { header: 'Source Reference', key: 'source', width: 35 },
         { header: 'Actual Status ✓', key: 'status', width: 18 }
       ];
 
@@ -193,6 +249,22 @@ class ExcelService {
           frequency: item.frequency || sheetName, // Use sheet name as frequency if not specified
           expectedStatus: item.expectedStatus || item.status || '',
           notes: item.notes || item.note || '',
+          // Build source reference with explicit page number handling
+          source: (() => {
+            if (item.source && (item.source.includes('Page') || item.source.includes('page'))) {
+              return item.source;
+            } else if (item.sourcePage || item.pageNumber) {
+              const page = item.sourcePage || item.pageNumber;
+              const file = item.sourceFile || item.fileName || item.source || 'Document';
+              return `${file}, Page ${page}`;
+            } else if (item.source) {
+              return item.source;
+            } else if (item.sourceFile) {
+              return item.sourceFile;
+            } else {
+              return 'Unknown';
+            }
+          })(),
           status: '' // Empty for user to fill
         };
 
@@ -228,9 +300,11 @@ class ExcelService {
         // Color code frequency cell with tab color
         row.getCell('frequency').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: tabColor } };
 
-        // Wrap text in inspection point and notes
+        // Wrap text in inspection point, notes, and source
         row.getCell('inspectionPoint').alignment = { wrapText: true, vertical: 'top' };
         row.getCell('notes').alignment = { wrapText: true, vertical: 'top' };
+        row.getCell('source').alignment = { wrapText: true, vertical: 'top' };
+        row.getCell('source').font = { size: 9, italic: true, color: { argb: 'FF666666' } };
       });
 
       // Apply borders to all cells (starting from row 4 - headers)

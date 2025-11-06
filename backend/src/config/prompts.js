@@ -92,17 +92,33 @@ CRITICAL REQUIREMENTS FOR SPEED AND BREVITY:
 - Inspection points: Maximum 1 sentence (10 words max)
 - Notes: Maximum 5 words
 - Generate ONLY the requested number of items, no more
-- Response should be concise but can use up to 8000 tokens if needed`,
-    user: (context) => `Based on the following maintenance manual excerpts:
+- Response should be concise but can use up to 8000 tokens if needed
+
+STRICT CONTENT REQUIREMENTS:
+- Use ONLY information from the provided context (PDF excerpts)
+- DO NOT add any information from your training data or external knowledge
+- DO NOT make assumptions or add details not present in the context
+- Extract exact wording from the context when possible
+- If information is missing in the context, use "See manual" or similar placeholder
+- Every item must be traceable to the provided context`,
+    user: (context) => `Based EXCLUSIVELY on the following maintenance manual excerpts from the PDF:
 
 ${context}
 
+CRITICAL INSTRUCTIONS - READ CAREFULLY:
+1. Extract ONLY inspection points that are EXPLICITLY mentioned in the provided context above
+2. DO NOT add any information from your training data, general knowledge, or the internet
+3. DO NOT create generic inspection points - only extract what is actually written in the PDF
+4. Use the exact wording from the PDF when possible
+5. If a detail is not in the provided context, do not invent it - use "See manual" or omit it
+6. Every item you create must be directly traceable to the provided context
+
 Extract the most important inspection points and create a structured checklist with these columns:
-- Item Name (3 words max)
-- Inspection Point (1 sentence, 10 words max)
-- Frequency (Annual/Monthly/Weekly/Daily)
-- Expected Status (brief)
-- Notes (optional, 5 words max)
+- Item Name (3 words max) - use exact component names from the PDF
+- Inspection Point (1 sentence, 10 words max) - use exact wording from the PDF when possible
+- Frequency (Annual/Monthly/Weekly/Daily) - use frequency mentioned in the PDF
+- Expected Status (brief) - use specifications/tolerances from the PDF
+- Notes (optional, 5 words max) - use instructions from the PDF
 
 CRITICAL: 
 - Keep response EXTREMELY BRIEF - minimal words only
@@ -113,6 +129,7 @@ CRITICAL:
 - Respond with ONLY the JSON array. No markdown, no explanations, no code blocks.
 - Your entire response should be parseable by JSON.parse().
 - Response should be concise but can use up to 8000 tokens if needed
+- REMEMBER: Only use information from the provided context - do not add external knowledge
 
 Example format (return similar structure - keep it MINIMAL):
 [
@@ -147,18 +164,34 @@ CRITICAL REQUIREMENTS FOR SPEED AND BREVITY:
 - Steps: Maximum 2 steps per request, each step: title (3 words), description (1 sentence, 10 words max)
 - Safety warnings: Maximum 2 items (5 words each)
 - Completion checklist: Maximum 2 items (3 words each)
-- Response should be concise but can use up to 8000 tokens if needed`,
-    user: (context) => `Based on the following maintenance manual excerpts:
+- Response should be concise but can use up to 8000 tokens if needed
+
+STRICT CONTENT REQUIREMENTS:
+- Use ONLY information from the provided context (PDF excerpts)
+- DO NOT add any information from your training data or external knowledge
+- DO NOT make assumptions or add details not present in the context
+- Extract exact wording from the context when possible
+- If information is missing in the context, use "See manual" or similar placeholder
+- Every step and instruction must be traceable to the provided context`,
+    user: (context) => `Based EXCLUSIVELY on the following maintenance manual excerpts from the PDF:
 
 ${context}
 
+CRITICAL INSTRUCTIONS - READ CAREFULLY:
+1. Extract ONLY procedures, steps, and instructions that are EXPLICITLY mentioned in the provided context above
+2. DO NOT add any information from your training data, general knowledge, or the internet
+3. DO NOT create generic procedures - only extract what is actually written in the PDF
+4. Use the exact wording from the PDF when possible
+5. If a detail is not in the provided context, do not invent it - use "See manual" or omit it
+6. Every step you create must be directly traceable to the provided context
+
 Create EXTREMELY concise step-by-step work instructions. Include ONLY what is requested:
-1. Title (5 words max)
-2. Overview (1 sentence, 15 words max)
-3. Prerequisites (tools: 2-3 items max, materials: 2-3 items max, safety: 2-3 items max - each item 2-3 words)
-4. Step-by-step procedure (only if requested - max 2 steps, each: title 3 words, description 1 sentence 10 words max)
-5. Safety warnings (only if requested - max 2 items, 5 words each)
-6. Completion checklist (only if requested - max 2 items, 3 words each)
+1. Title (5 words max) - use exact procedure name from the PDF
+2. Overview (1 sentence, 15 words max) - summarize what the PDF says about this procedure
+3. Prerequisites (tools: 2-3 items max, materials: 2-3 items max, safety: 2-3 items max - each item 2-3 words) - use tools/materials mentioned in the PDF
+4. Step-by-step procedure (only if requested - max 2 steps, each: title 3 words, description 1 sentence 10 words max) - use exact steps from the PDF
+5. Safety warnings (only if requested - max 2 items, 5 words each) - use safety warnings from the PDF
+6. Completion checklist (only if requested - max 2 items, 3 words each) - use verification steps from the PDF
 
 CRITICAL: 
 - Keep ALL sections EXTREMELY BRIEF - minimal words only
@@ -172,6 +205,7 @@ CRITICAL:
 - Respond with ONLY the JSON object. No markdown, no explanations, no code blocks.
 - Your entire response should be parseable by JSON.parse().
 - Response should be concise but can use up to 8000 tokens if needed
+- REMEMBER: Only use information from the provided context - do not add external knowledge
 
 Example format (return similar structure - keep it MINIMAL):
 {

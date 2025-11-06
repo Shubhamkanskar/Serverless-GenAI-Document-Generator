@@ -68,9 +68,12 @@ const processIngestion = async (fileId, s3Key) => {
         message: `Extracted ${extractedData.metadata.numPages} pages, splitting into chunks...`
       });
 
-      // Step 2: Split into chunks
-      logger.info('Step 2: Splitting text into chunks...');
-      chunks = pdfService.splitText(extractedData.text, {
+      // Step 2: Split into chunks with page tracking
+      logger.info('Step 2: Splitting text into chunks with PAGE-BASED chunking for accurate attribution...');
+
+      // Use page-based chunking for accurate page attribution
+      // This ensures each chunk belongs to exactly one page
+      chunks = pdfService.splitTextByPages(extractedData.metadata.pageTexts, {
         fileId,
         fileName: extractedData.metadata.fileName || s3Key.split('/').pop(),
         numPages: extractedData.metadata.numPages,

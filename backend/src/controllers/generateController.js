@@ -17,10 +17,11 @@ import { logger } from '../utils/logger.js';
  * Split context into multiple smaller chunks to avoid token limit
  * Uses aggressive chunking: many small chunks = very small responses
  * @param {string} context - Full context string
- * @param {number} targetChunkSize - Target size per chunk in characters (default: 500)
- * @returns {Array<string>} Array of context chunks
+ * @param {Array<Object>} chunkPositionMap - Array of { startChar, endChar, chunk } mappings
+ * @param {number} targetChunkSize - Target size per chunk in characters (default: 300)
+ * @returns {Array<Object>} Array of context chunks with source metadata
  */
-const splitContextIntoChunks = (context, targetChunkSize = 300) => {
+const splitContextIntoChunks = (context, chunkPositionMap = [], targetChunkSize = 300) => {
   const totalLength = context.length;
   const numChunks = Math.max(15, Math.ceil(totalLength / targetChunkSize)); // Minimum 15 chunks
   
@@ -30,20 +31,98 @@ const splitContextIntoChunks = (context, targetChunkSize = 300) => {
   for (let i = 0; i < numChunks; i++) {
     const start = i * chunkSize;
     const end = Math.min(start + chunkSize, totalLength);
-    const chunk = context.substring(start, end);
-    if (chunk.trim().length > 0) {
-      chunks.push(chunk);
+    const chunkText = context.substring(start, end);
+    if (chunkText.trim().length > 0) {
+      // Find which source chunk(s) this text comes from using position map
+      const sourceInfo = findSourceForTextRange(start, end, chunkPositionMap);
+      chunks.push({
+        text: chunkText,
+        startChar: start,
+        endChar: end,
+        source: sourceInfo
+      });
     }
   }
   
   logger.info(`Split context into ${chunks.length} chunks (target: ${targetChunkSize} chars per chunk)`, {
     totalLength,
     avgChunkSize: Math.round(totalLength / chunks.length),
-    minChunkSize: Math.min(...chunks.map(c => c.length)),
-    maxChunkSize: Math.max(...chunks.map(c => c.length))
+    minChunkSize: Math.min(...chunks.map(c => c.text.length)),
+    maxChunkSize: Math.max(...chunks.map(c => c.text.length)),
+    sourceChunksMapped: chunkPositionMap.length
   });
   
   return chunks;
+};
+
+/**
+ * Find source metadata for a text range in the context using chunk position map
+ * @param {number} startChar - Start character position in merged context
+ * @param {number} endChar - End character position in merged context
+ * @param {Array<Object>} chunkPositionMap - Array of { startChar, endChar, chunk } mappings
+ * @returns {Object} Source information
+ */
+const findSourceForTextRange = (startChar, endChar, chunkPositionMap) => {
+  if (!chunkPositionMap || chunkPositionMap.length === 0) {
+    return { fileName: 'Unknown', pageNumber: null };
+  }
+
+  // Find which original chunk(s) this range overlaps with
+  // Use the chunk that contains the start position
+  for (const mappedChunk of chunkPositionMap) {
+    if (startChar >= mappedChunk.startChar && startChar < mappedChunk.endChar) {
+      // This chunk contains the start of our range
+      const chunk = mappedChunk.chunk;
+      const fileName = chunk.metadata?.fileName || chunk.metadata?.originalFileName || 'Unknown Document';
+      // Prefer displayPageNumber (internal page number) over pageNumber (PDF index)
+      const pageNumber = chunk.metadata?.displayPageNumber || chunk.metadata?.pageNumber || null;
+      const pageRange = chunk.metadata?.pageRange || null;
+      const internalPageNumber = chunk.metadata?.internalPageNumber || null;
+
+      // Diagnostic: Warn if page number is missing
+      if (!pageNumber) {
+        logger.warn('Missing page number in chunk metadata (diagnostic)', {
+          chunkId: chunk.id,
+          fileName,
+          hasMetadata: !!chunk.metadata,
+          metadataKeys: chunk.metadata ? Object.keys(chunk.metadata) : [],
+          chunkStart: mappedChunk.startChar,
+          chunkEnd: mappedChunk.endChar
+        });
+      }
+
+      logger.debug(`Mapped text range ${startChar}-${endChar} to chunk`, {
+        fileName,
+        pageNumber,
+        internalPageNumber,
+        pageRange,
+        chunkStart: mappedChunk.startChar,
+        chunkEnd: mappedChunk.endChar
+      });
+      
+      return {
+        fileName,
+        pageNumber,
+        internalPageNumber,
+        pageRange: pageRange || (pageNumber ? `${pageNumber}` : null)
+      };
+    }
+  }
+  
+  // Fallback to first chunk if not found
+  const firstMapped = chunkPositionMap[0];
+  const firstChunk = firstMapped?.chunk;
+  if (firstChunk) {
+    // Prefer displayPageNumber (internal page number) over pageNumber (PDF index)
+    const pageNumber = firstChunk.metadata?.displayPageNumber || firstChunk.metadata?.pageNumber || null;
+    return {
+      fileName: firstChunk.metadata?.fileName || firstChunk.metadata?.originalFileName || 'Unknown Document',
+      pageNumber,
+      pageRange: firstChunk.metadata?.pageRange || (pageNumber ? `${pageNumber}` : null)
+    };
+  }
+  
+  return { fileName: 'Unknown', pageNumber: null };
 };
 
 /**
@@ -66,7 +145,10 @@ const generateChecksheetChunked = async (contextChunks, promptConfig, llmProvide
   const maxItemsPerChunk = 8; // Generate max 8 items per chunk to keep responses small
 
   for (let i = 0; i < contextChunks.length; i++) {
-    const chunk = contextChunks[i];
+    const chunkObj = contextChunks[i];
+    const chunk = typeof chunkObj === 'string' ? chunkObj : chunkObj.text;
+    const sourceInfo = chunkObj.source || { fileName: 'Unknown', pageNumber: null };
+    
     logger.info(`Generating checksheet chunk ${i + 1}/${totalChunks} (chunk size: ${chunk.length} chars, max ${maxItemsPerChunk} items)...`);
     
     if (onProgress) {
@@ -118,9 +200,19 @@ const generateChecksheetChunked = async (contextChunks, promptConfig, llmProvide
       // Limit items if somehow more were generated
       const limitedItems = Array.isArray(chunkItems) ? chunkItems.slice(0, maxItemsPerChunk) : [];
       
-      if (limitedItems.length > 0) {
-        allItems.push(...limitedItems);
-        logger.info(`Chunk ${i + 1}/${totalChunks} generated ${limitedItems.length} items successfully`);
+      // Add source reference to each item
+      const itemsWithSources = limitedItems.map(item => ({
+        ...item,
+        source: sourceInfo.pageNumber 
+          ? `${sourceInfo.fileName}, Page ${sourceInfo.pageRange || sourceInfo.pageNumber}`
+          : sourceInfo.fileName,
+        sourceFile: sourceInfo.fileName,
+        sourcePage: sourceInfo.pageNumber || null
+      }));
+      
+      if (itemsWithSources.length > 0) {
+        allItems.push(...itemsWithSources);
+        logger.info(`Chunk ${i + 1}/${totalChunks} generated ${itemsWithSources.length} items successfully with source: ${sourceInfo.fileName}${sourceInfo.pageNumber ? `, Page ${sourceInfo.pageNumber}` : ''}`);
       } else {
         logger.warn(`Chunk ${i + 1}/${totalChunks} returned no items`);
       }
@@ -136,7 +228,15 @@ const generateChecksheetChunked = async (contextChunks, promptConfig, llmProvide
   }
 
   logger.info(`Chunked generation complete: ${allItems.length} total items from ${totalChunks} chunks`);
-  return allItems;
+  
+  // Return items with metadata
+  return {
+    items: allItems,
+    metadata: {
+      totalChunks,
+      totalItems: allItems.length
+    }
+  };
 };
 
 /**
@@ -173,7 +273,9 @@ const generateWorkInstructionsChunked = async (contextChunks, promptConfig, llmP
   // But if any chunk fails, we'll still have partial data
 
   for (let i = 0; i < contextChunks.length; i++) {
-    const chunk = contextChunks[i];
+    const chunkObj = contextChunks[i];
+    const chunk = typeof chunkObj === 'string' ? chunkObj : chunkObj.text;
+    const sourceInfo = chunkObj.source || { fileName: 'Unknown', pageNumber: null };
     const chunkIndex = i + 1;
     const isFirstChunk = i === 0;
     const isLastChunk = i === contextChunks.length - 1;
@@ -308,27 +410,63 @@ const generateWorkInstructionsChunked = async (contextChunks, promptConfig, llmP
           }
         }
 
-        // Merge steps (from middle/last chunks)
+        // Merge steps (from middle/last chunks) with source references
         if (chunkData.steps && Array.isArray(chunkData.steps)) {
+          // Build source reference string
+          const sourceRef = sourceInfo.pageNumber 
+            ? `${sourceInfo.fileName}, Page ${sourceInfo.pageRange || sourceInfo.pageNumber}`
+            : sourceInfo.fileName;
+          
           // Limit steps if somehow more were generated
           const limitedSteps = chunkData.steps.slice(0, maxStepsPerChunk);
           
-          // Renumber steps to be sequential
+          // Renumber steps to be sequential and add source references
           const startStepNumber = mergedResult.steps.length + 1;
           const renumberedSteps = limitedSteps.map((step, idx) => ({
             ...step,
-            stepNumber: startStepNumber + idx
+            stepNumber: startStepNumber + idx,
+            source: sourceRef,
+            sourceFile: sourceInfo.fileName,
+            sourcePage: sourceInfo.pageNumber || null
           }));
           mergedResult.steps.push(...renumberedSteps);
-          logger.info(`Chunk ${chunkIndex}/${totalChunks} generated ${renumberedSteps.length} steps successfully`);
+          logger.info(`Chunk ${chunkIndex}/${totalChunks} generated ${renumberedSteps.length} steps successfully with source: ${sourceInfo.fileName}${sourceInfo.pageNumber ? `, Page ${sourceInfo.pageNumber}` : ''}`);
         }
 
-        // Merge safety warnings and completion checklist (from last chunk)
+        // Merge safety warnings and completion checklist (from last chunk) with source references
         if (chunkData.safetyWarnings && Array.isArray(chunkData.safetyWarnings)) {
-          mergedResult.safetyWarnings = [...mergedResult.safetyWarnings, ...chunkData.safetyWarnings];
+          // Build source reference string
+          const sourceRef = sourceInfo.pageNumber 
+            ? `${sourceInfo.fileName}, Page ${sourceInfo.pageRange || sourceInfo.pageNumber}`
+            : sourceInfo.fileName;
+          
+          const warningsWithSource = chunkData.safetyWarnings.map(warning => {
+            const warningText = typeof warning === 'string' ? warning : warning.text || warning;
+            return {
+              text: warningText,
+              source: sourceRef,
+              sourceFile: sourceInfo.fileName,
+              sourcePage: sourceInfo.pageNumber || null
+            };
+          });
+          mergedResult.safetyWarnings.push(...warningsWithSource);
         }
         if (chunkData.completionChecklist && Array.isArray(chunkData.completionChecklist)) {
-          mergedResult.completionChecklist = [...mergedResult.completionChecklist, ...chunkData.completionChecklist];
+          // Build source reference string
+          const sourceRef = sourceInfo.pageNumber 
+            ? `${sourceInfo.fileName}, Page ${sourceInfo.pageRange || sourceInfo.pageNumber}`
+            : sourceInfo.fileName;
+          
+          const checklistWithSource = chunkData.completionChecklist.map(item => {
+            const itemText = typeof item === 'string' ? item : item.text || item;
+            return {
+              text: itemText,
+              source: sourceRef,
+              sourceFile: sourceInfo.fileName,
+              sourcePage: sourceInfo.pageNumber || null
+            };
+          });
+          mergedResult.completionChecklist.push(...checklistWithSource);
         }
       }
     } catch (error) {
@@ -347,14 +485,32 @@ const generateWorkInstructionsChunked = async (contextChunks, promptConfig, llmP
     mergedResult.title = 'Work Instructions';
   }
 
-  // Deduplicate prerequisites arrays
+  // Deduplicate prerequisites arrays (keep as strings)
   mergedResult.prerequisites.tools = [...new Set(mergedResult.prerequisites.tools)];
   mergedResult.prerequisites.materials = [...new Set(mergedResult.prerequisites.materials)];
   mergedResult.prerequisites.safety = [...new Set(mergedResult.prerequisites.safety)];
   
-  // Deduplicate safety warnings and completion checklist
-  mergedResult.safetyWarnings = [...new Set(mergedResult.safetyWarnings)];
-  mergedResult.completionChecklist = [...new Set(mergedResult.completionChecklist)];
+  // Deduplicate safety warnings and completion checklist (keep source info)
+  // Deduplicate by text, but keep first occurrence with its source
+  const seenWarnings = new Map();
+  mergedResult.safetyWarnings = mergedResult.safetyWarnings.filter(warning => {
+    const text = typeof warning === 'string' ? warning : warning.text || warning;
+    if (!seenWarnings.has(text)) {
+      seenWarnings.set(text, true);
+      return true;
+    }
+    return false;
+  });
+  
+  const seenChecklist = new Map();
+  mergedResult.completionChecklist = mergedResult.completionChecklist.filter(item => {
+    const text = typeof item === 'string' ? item : item.text || item;
+    if (!seenChecklist.has(text)) {
+      seenChecklist.set(text, true);
+      return true;
+    }
+    return false;
+  });
 
   logger.info(`Chunked work instructions generation complete: ${mergedResult.steps.length} steps from ${totalChunks} chunks`);
   return mergedResult;
@@ -441,16 +597,35 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
 
   logger.info(`Retrieved ${relevantChunks.length} relevant chunks`);
 
-  // Step 3: Build context from chunks with size limit
-  logger.info('Building context from chunks...');
+  // Diagnostic: Log sample chunks to verify page metadata is present
+  if (relevantChunks.length > 0) {
+    const sampleChunks = [relevantChunks[0], relevantChunks[Math.floor(relevantChunks.length / 2)], relevantChunks[relevantChunks.length - 1]].filter(Boolean);
+    logger.info('Sample retrieved chunks with metadata (diagnostic)', {
+      samples: sampleChunks.map(c => ({
+        id: c.id,
+        hasMetadata: !!c.metadata,
+        fileName: c.metadata?.fileName,
+        pageNumber: c.metadata?.pageNumber,
+        pageRange: c.metadata?.pageRange,
+        chunkIndex: c.metadata?.chunkIndex,
+        metadataKeys: c.metadata ? Object.keys(c.metadata) : []
+      }))
+    });
+  }
+
+  // Step 3: Build context from chunks with size limit and track sources with position mapping
+  logger.info('Building context from chunks with source tracking...');
   let context = '';
   let chunksUsed = 0;
+  const sourceReferences = new Map(); // Track unique sources
+  const chunkPositionMap = []; // Map: [{ startChar, endChar, chunk }]
 
   // Build context incrementally, stopping when we reach max size
   for (const chunk of relevantChunks) {
     const text = (chunk.text || chunk.metadata?.text || '').trim();
     if (text.length === 0) continue;
 
+    const chunkStartChar = context.length;
     const chunkWithSeparator = context ? `\n\n${text}` : text;
     const potentialContext = context + chunkWithSeparator;
 
@@ -461,14 +636,87 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
     }
 
     context = potentialContext;
+    const chunkEndChar = context.length;
+    
+    // Map this chunk's position in the merged context
+    chunkPositionMap.push({
+      startChar: chunkStartChar,
+      endChar: chunkEndChar,
+      chunk: chunk // Store reference to original chunk with metadata
+    });
+
+    // Diagnostic: Log if this chunk is missing page number
+    if (!chunk.metadata?.pageNumber) {
+      logger.warn(`Chunk ${chunksUsed + 1} missing pageNumber in metadata`, {
+        chunkId: chunk.id,
+        hasMetadata: !!chunk.metadata,
+        metadataKeys: chunk.metadata ? Object.keys(chunk.metadata) : [],
+        fileName: chunk.metadata?.fileName
+      });
+    }
+
     chunksUsed++;
+    
+    // Track source references for citations
+    const fileName = chunk.metadata?.fileName || chunk.metadata?.originalFileName || 'Unknown Document';
+    // Prefer displayPageNumber (internal page number) over pageNumber (PDF index)
+    const pageNumber = chunk.metadata?.displayPageNumber || chunk.metadata?.pageNumber || null;
+    const pageRange = chunk.metadata?.pageRange || null;
+    
+    const sourceKey = `${fileName}`;
+    if (!sourceReferences.has(sourceKey)) {
+      sourceReferences.set(sourceKey, {
+        fileName,
+        pages: new Set()
+      });
+    }
+    
+    // Add page numbers to this source
+    if (pageNumber) {
+      sourceReferences.get(sourceKey).pages.add(pageNumber);
+    }
+    
+    logger.debug(`Added chunk to context`, {
+      fileName,
+      pageNumber,
+      chunkStartChar,
+      chunkEndChar,
+      textLength: text.length
+    });
   }
 
   if (context.length === 0) {
     throw new Error('No valid text content found in retrieved chunks');
   }
 
-  logger.info(`Context built: ${context.length} characters from ${chunksUsed} of ${relevantChunks.length} chunks`);
+  // Diagnostic: Summary of page number tracking
+  const chunksWithPageNumbers = chunkPositionMap.filter(m => m.chunk.metadata?.pageNumber).length;
+  logger.info('Context building complete - page tracking summary', {
+    totalChunks: chunksUsed,
+    chunksWithPageNumbers,
+    chunksWithoutPageNumbers: chunksUsed - chunksWithPageNumbers,
+    pageTrackingPercentage: Math.round((chunksWithPageNumbers / chunksUsed) * 100) + '%'
+  });
+
+  if (chunksWithPageNumbers === 0) {
+    logger.error('⚠️ CRITICAL: No chunks have page numbers! Documents may need to be re-ingested with the updated code.');
+  }
+
+  // Build citation text
+  const citations = Array.from(sourceReferences.entries()).map(([key, value]) => {
+    const pages = Array.from(value.pages).sort((a, b) => a - b);
+    if (pages.length > 0) {
+      const pageText = pages.length > 3 
+        ? `Pages ${pages.slice(0, 3).join(', ')}...` 
+        : `Page${pages.length > 1 ? 's' : ''} ${pages.join(', ')}`;
+      return `${value.fileName} (${pageText})`;
+    }
+    return value.fileName;
+  });
+
+  logger.info(`Context built: ${context.length} characters from ${chunksUsed} of ${relevantChunks.length} chunks from ${citations.length} source(s)`, {
+    sources: citations
+  });
 
   // Step 4: Get prompt template based on use case from prompt library
   // Use promptId parameter to select specific prompt from library
@@ -522,14 +770,18 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
 
   // Split context into many small chunks (15+ chunks, ~300 chars each)
   // More chunks = smaller responses = less chance of exceeding token limit
+  // Pass chunk position map to preserve lineage
   const contextSize = context.length;
   const targetChunkSize = 300; // Very small chunks (~300 chars each)
-  const contextChunks = splitContextIntoChunks(context, targetChunkSize);
-  logger.info(`Using ${contextChunks.length} chunks for generation (context size: ${contextSize} chars, target: ~${targetChunkSize} chars per chunk)`);
+  const contextChunks = splitContextIntoChunks(context, chunkPositionMap, targetChunkSize);
+  logger.info(`Using ${contextChunks.length} chunks for generation (context size: ${contextSize} chars, target: ~${targetChunkSize} chars per chunk, from ${chunksUsed} source chunks)`);
 
   // Use chunked generation for both checksheet and work instructions
+  let generationMetadata = {};
   if (useCase === 'checksheet') {
-    parsedData = await generateChecksheetChunked(contextChunks, promptConfig, llmProvider, onProgress);
+    const result = await generateChecksheetChunked(contextChunks, promptConfig, llmProvider, onProgress);
+    parsedData = result.items || result; // Handle both old and new format
+    generationMetadata = result.metadata || {};
   } else if (useCase === 'workInstructions') {
     parsedData = await generateWorkInstructionsChunked(contextChunks, promptConfig, llmProvider, onProgress);
   } else {
@@ -609,7 +861,12 @@ export const handleGenerate = async ({ useCase, documentIds, queryText, llmProvi
     contextLength: context.length,
     status: 'success',
     message: `${useCase} generated successfully using ${llmProvider}`,
-    processingTime: `${processingTime}s`
+    processingTime: `${processingTime}s`,
+    metadata: {
+      sources: citations,
+      citationText: citations.length > 0 ? `\n\nSource References:\n${citations.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : '',
+      ...generationMetadata
+    }
   };
 };
 

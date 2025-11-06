@@ -162,32 +162,92 @@ class PineconeService {
         const chunkMetadata = typeof chunk === 'string' ? {} : chunk;
         
         // Filter metadata to only include Pinecone-compatible types (string, number, boolean, list of strings)
-        // Exclude arrays, objects, and embedding vectors
+        // Exclude large fields that exceed Pinecone's 40KB metadata limit
         const filteredMetadata = {};
+        const excludedFields = new Set([
+          'embedding',      // Already in values
+          'text',           // We'll add a truncated version separately
+          'pageTexts',      // Large array - only needed during chunking, not storage
+          'chunkSize',      // Redundant
+          'startChar',      // Can be calculated
+          'endChar'         // Can be calculated
+        ]);
+
+        // Critical fields for source attribution - preserve these explicitly
+        const criticalFields = ['pageNumber', 'pageRange', 'internalPageNumber', 'displayPageNumber', 'fileName', 'fileId', 'numPages'];
+        for (const field of criticalFields) {
+          if (chunkMetadata[field] !== undefined && chunkMetadata[field] !== null) {
+            filteredMetadata[field] = chunkMetadata[field];
+          }
+        }
+        
+        // Use displayPageNumber for page if available (preferred over pageNumber for user-facing references)
+        if (chunkMetadata.displayPageNumber && !filteredMetadata.page) {
+          filteredMetadata.page = chunkMetadata.displayPageNumber; // Add 'page' field for compatibility
+        } else if (chunkMetadata.pageNumber && !filteredMetadata.page) {
+          filteredMetadata.page = chunkMetadata.pageNumber; // Fallback to PDF page index
+        }
+        
         for (const [key, value] of Object.entries(chunkMetadata)) {
-          // Skip embedding field (it's in values, not metadata)
-          if (key === 'embedding') {
+          // Skip excluded fields
+          if (excludedFields.has(key)) {
             continue;
           }
           
-          // Only include scalar values or arrays of strings
+          // Only include scalar values or small arrays
           if (value === null || value === undefined) {
             continue;
           }
           
-          if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-            filteredMetadata[key] = value;
-          } else if (Array.isArray(value) && value.every(item => typeof item === 'string')) {
-            filteredMetadata[key] = value;
-          } else if (typeof value === 'object') {
-            // Convert objects to strings if they're simple
-            try {
-              filteredMetadata[key] = JSON.stringify(value);
-            } catch (e) {
-              // Skip complex objects that can't be stringified
-              logger.warn(`Skipping metadata field ${key}: cannot convert to Pinecone-compatible type`);
+          // String values - limit size to prevent metadata bloat
+          if (typeof value === 'string') {
+            // Limit string fields to 500 chars max (except for small identifiers)
+            if (key === 'fileName' || key === 'originalFileName' || key === 's3Key' || key === 'fileId') {
+              filteredMetadata[key] = value; // Allow full file names/IDs
+            } else if (value.length <= 500) {
+              filteredMetadata[key] = value;
+            } else {
+              // Truncate long strings
+              filteredMetadata[key] = value.substring(0, 500);
+              logger.debug(`Truncated metadata field ${key} from ${value.length} to 500 chars`);
             }
+          } else if (typeof value === 'number' || typeof value === 'boolean') {
+            filteredMetadata[key] = value;
+          } else if (Array.isArray(value)) {
+            // Only include small arrays of strings (max 10 items, each max 200 chars)
+            if (value.length <= 10 && value.every(item => typeof item === 'string' && item.length <= 200)) {
+              filteredMetadata[key] = value;
+            } else {
+              logger.debug(`Skipping large array metadata field ${key} (${value.length} items)`);
+            }
+          } else if (typeof value === 'object') {
+            // Skip objects - they're too large for metadata
+            logger.debug(`Skipping object metadata field ${key}`);
           }
+        }
+        
+        // Calculate metadata size estimate (rough)
+        const metadataSize = JSON.stringify({
+          fileId,
+          chunkIndex: index,
+          text: chunkText.substring(0, 300), // Reduced from 1000 to 300
+          ...filteredMetadata
+        }).length;
+        
+        if (metadataSize > 35000) { // Leave buffer below 40KB limit
+          logger.warn(`Metadata size ${metadataSize} bytes is large, further reducing text preview`);
+          // Further reduce text if metadata is still too large
+          const textPreview = chunkText.substring(0, Math.max(100, 300 - (metadataSize - 35000) / 10));
+          return {
+            id: `${fileId}-chunk-${index}`,
+            values: embeddings[index],
+            metadata: {
+              fileId,
+              chunkIndex: index,
+              text: textPreview,
+              ...filteredMetadata
+            }
+          };
         }
         
         return {
@@ -196,11 +256,27 @@ class PineconeService {
           metadata: {
             fileId,
             chunkIndex: index,
-            text: chunkText.substring(0, 1000), // Limit text in metadata (Pinecone has metadata size limits)
+            text: chunkText.substring(0, 300), // Reduced from 1000 to 300 chars
             ...filteredMetadata
           }
         };
       });
+
+      // Diagnostic: Log sample vectors with metadata to verify page numbers are included
+      if (vectors.length > 0) {
+        const sampleVectors = [vectors[0], vectors[Math.floor(vectors.length / 2)], vectors[vectors.length - 1]].filter(Boolean);
+        logger.info('Sample vectors before storage (diagnostic)', {
+          samples: sampleVectors.map(v => ({
+            id: v.id,
+            hasPageNumber: 'pageNumber' in v.metadata,
+            pageNumber: v.metadata.pageNumber,
+            pageRange: v.metadata.pageRange,
+            fileName: v.metadata.fileName,
+            chunkIndex: v.metadata.chunkIndex,
+            metadataKeys: Object.keys(v.metadata)
+          }))
+        });
+      }
 
       return await this.upsertVectors(vectors, namespace, maxRetries);
     } catch (error) {
@@ -211,7 +287,7 @@ class PineconeService {
   }
 
   /**
-   * Upsert vectors to Pinecone index with retry logic
+   * Upsert vectors to Pinecone index with retry logic and batching
    * @param {Array} vectors - Array of vectors to upsert
    * @param {string} namespace - Optional namespace (default: '')
    * @param {number} maxRetries - Maximum retry attempts (default: 3)
@@ -226,24 +302,76 @@ class PineconeService {
       // Validate vector dimensions
       this.validateVectorDimensions(vectors);
 
-      let lastError;
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          const namespaceIndex = namespace ? this.index.namespace(namespace) : this.index;
-          const result = await namespaceIndex.upsert(vectors);
-          logger.info(`Upserted ${vectors.length} vectors successfully`);
-          return result;
-        } catch (error) {
-          lastError = error;
-          if (attempt < maxRetries) {
-            const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
-            logger.warn(`Upsert attempt ${attempt} failed, retrying in ${delay}ms...`, error);
-            await new Promise(resolve => setTimeout(resolve, delay));
+      // Pinecone recommends batching upserts (max 100 vectors per request)
+      // For large documents, batch to improve performance and avoid timeouts
+      const batchSize = 100;
+      const totalVectors = vectors.length;
+      
+      if (totalVectors <= batchSize) {
+        // Small batch - upsert all at once
+        let lastError;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            const namespaceIndex = namespace ? this.index.namespace(namespace) : this.index;
+            const result = await namespaceIndex.upsert(vectors);
+            logger.info(`Upserted ${totalVectors} vectors successfully`);
+            return result;
+          } catch (error) {
+            lastError = error;
+            if (attempt < maxRetries) {
+              const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
+              logger.warn(`Upsert attempt ${attempt} failed, retrying in ${delay}ms...`, error);
+              await new Promise(resolve => setTimeout(resolve, delay));
+            }
           }
         }
+        throw new Error(`Failed to upsert vectors after ${maxRetries} attempts: ${lastError.message}`);
+      } else {
+        // Large batch - process in chunks with parallel execution
+        logger.info(`Upserting ${totalVectors} vectors in batches of ${batchSize}...`);
+        const namespaceIndex = namespace ? this.index.namespace(namespace) : this.index;
+        const batches = [];
+        
+        for (let i = 0; i < totalVectors; i += batchSize) {
+          const batch = vectors.slice(i, i + batchSize);
+          batches.push(batch);
+        }
+        
+        // Process batches in parallel (up to 5 concurrent batches)
+        const concurrencyLimit = 5;
+        let processed = 0;
+        
+        for (let i = 0; i < batches.length; i += concurrencyLimit) {
+          const concurrentBatches = batches.slice(i, i + concurrencyLimit);
+          
+          const batchPromises = concurrentBatches.map(async (batch, batchIndex) => {
+            let lastError;
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+              try {
+                await namespaceIndex.upsert(batch);
+                processed += batch.length;
+                if ((i + batchIndex) % 10 === 0 || processed === totalVectors) {
+                  logger.info(`Upsert progress: ${processed}/${totalVectors} vectors (${Math.round(processed/totalVectors*100)}%)`);
+                }
+                return;
+              } catch (error) {
+                lastError = error;
+                if (attempt < maxRetries) {
+                  const delay = Math.pow(2, attempt) * 500; // Shorter delay for batch retries
+                  logger.warn(`Batch ${i + batchIndex + 1} upsert attempt ${attempt} failed, retrying in ${delay}ms...`, error);
+                  await new Promise(resolve => setTimeout(resolve, delay));
+                }
+              }
+            }
+            throw new Error(`Failed to upsert batch ${i + batchIndex + 1} after ${maxRetries} attempts: ${lastError.message}`);
+          });
+          
+          await Promise.all(batchPromises);
+        }
+        
+        logger.info(`Successfully upserted all ${totalVectors} vectors in ${batches.length} batches`);
+        return { upsertedCount: totalVectors };
       }
-
-      throw new Error(`Failed to upsert vectors after ${maxRetries} attempts: ${lastError.message}`);
     } catch (error) {
       const errorMessage = `Upsert vectors failed: ${error.message}`;
       logger.error('Upsert vectors failed', error);
